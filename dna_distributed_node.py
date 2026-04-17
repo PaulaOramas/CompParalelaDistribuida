@@ -569,6 +569,7 @@ class WorkerNode:
         self.hostname = socket.gethostname()
         self.pid = os.getpid()
         self.cpu_count = os.cpu_count() or 1
+        self.local_ip = self._get_local_ip()
 
         self.context = zmq.Context()
         self.running = False
@@ -626,6 +627,17 @@ class WorkerNode:
             "global_memory": GPU_GLOBAL_MEM,
             "local_memory": GPU_LOCAL_MEM,
         }
+
+    def _get_local_ip(self) -> str:
+        """Get the local IP address of this machine."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "127.0.0.1"
 
     def start(self):
         """Start the worker node."""
@@ -800,6 +812,7 @@ class WorkerNode:
             "pid": self.pid,
             "cpu_count": self.cpu_count,
             "gpu_info": self._get_gpu_info(),
+            "local_ip": self.local_ip,
         })
         print("  📡 Registrado con el coordinador. Esperando trabajo...")
 
@@ -990,32 +1003,123 @@ class WorkerNode:
         self.current_chunk_id = None
 
     def _start_election(self):
-        """Start a leader election using Bully algorithm."""
+        """Start a leader election using Bully algorithm.
+        Only the worker with the LOWEST node_id among known peers
+        should promote itself to coordinator."""
         self.election_in_progress = True
         print(f"  🗳 Iniciando elección de líder (mi ID: {self.node_id})")
 
-        # Broadcast election to all peers
-        try:
-            # Use the existing PUB/SUB channel indirectly through dealer
-            self._send_message("ELECTION", {
-                "initiator": self.node_id,
-            })
-        except Exception:
-            pass
+        # Determine who should be the coordinator based on known peers
+        # The coordinator's state contains the worker list
+        all_peer_ids = set()
+        all_peer_ids.add(self.node_id)
 
-        # Wait for responses from higher-priority nodes
-        time.sleep(ELECTION_TIMEOUT)
+        # Get peers from last coordinator state (most reliable)
+        if self.last_coordinator_state:
+            workers_state = self.last_coordinator_state.get("workers", {})
+            for peer_id, peer_info in workers_state.items():
+                if peer_info.get("connected", False):
+                    all_peer_ids.add(peer_id)
 
-        if not self.running:
-            return
+        # Also check known_peers from PEER_LIST broadcasts
+        if self.known_peers:
+            for peer_id in self.known_peers:
+                all_peer_ids.add(peer_id)
 
-        # Check if coordinator came back
-        if time.time() - self.coordinator_last_seen < COORDINATOR_TIMEOUT:
-            print(f"  ✅ Coordinador respondió — elección cancelada")
-            self.election_in_progress = False
-            return
+        lowest_id = min(all_peer_ids)
+        print(f"  📋 Peers conocidos: {len(all_peer_ids)} — ID más bajo: {lowest_id[:8]}")
 
-        # No response: become the new coordinator
+        if self.node_id != lowest_id:
+            # I'm NOT the winner — actively search for the new coordinator
+            print(f"  ⏳ Mi ID ({self.node_id[:8]}) no es el más bajo. "
+                  f"Esperando que {lowest_id[:8]} lance coordinador...")
+
+            # Collect all known IPs to probe for the new coordinator
+            # The winner's coordinator will be on port 5557 (PUB on 5558)
+            probe_ips = set()
+            # IP from coordinator address we were connected to
+            try:
+                coord_host = self.coordinator_addr.rsplit(":", 1)[0]
+                if not coord_host.startswith("127."):
+                    probe_ips.add(coord_host)
+            except Exception:
+                pass
+            # Extract IPs from peer state (coordinator broadcasts local_ip)
+            if self.last_coordinator_state:
+                for pid, pinfo in self.last_coordinator_state.get("workers", {}).items():
+                    ip = pinfo.get("local_ip", "")
+                    if ip and not ip.startswith("127."):
+                        probe_ips.add(ip)
+            # Also from known_peers broadcast
+            if self.known_peers:
+                for pid, pinfo in self.known_peers.items():
+                    ip = pinfo.get("local_ip", "") if isinstance(pinfo, dict) else ""
+                    if ip and not ip.startswith("127."):
+                        probe_ips.add(ip)
+
+            print(f"  🔍 IPs candidatas para nuevo coordinador: {probe_ips}")
+
+            # Give the winner time to start its coordinator
+            time.sleep(5)
+
+            # Try connecting to new coordinator PUB on port 5558 at each known IP
+            for attempt in range(6):  # 6 attempts × 5s = ~30s
+                if not self.running:
+                    return
+                for ip in probe_ips:
+                    try:
+                        ctx = zmq.Context()
+                        sub = ctx.socket(zmq.SUB)
+                        sub.setsockopt(zmq.SUBSCRIBE, b"")
+                        sub.setsockopt(zmq.RCVTIMEO, 3000)
+                        sub.connect(f"tcp://{ip}:5558")
+                        msg = sub.recv_json()
+                        sub.close()
+                        ctx.term()
+
+                        if msg.get("type") == "COORDINATOR_HEARTBEAT":
+                            new_addr = msg.get("coordinator_addr", f"{ip}:5557")
+                            print(f"  ✅ Nuevo coordinador encontrado en {new_addr}")
+                            self._reconnect_to_coordinator(new_addr)
+                            self.election_in_progress = False
+                            return
+                    except zmq.Again:
+                        pass
+                    except Exception:
+                        pass
+                    finally:
+                        try:
+                            sub.close()
+                            ctx.term()
+                        except Exception:
+                            pass
+
+                # Also check if regular coordinator heartbeat arrived
+                if time.time() - self.coordinator_last_seen < COORDINATOR_TIMEOUT:
+                    print(f"  ✅ Nuevo coordinador detectado — elección resuelta")
+                    self.election_in_progress = False
+                    return
+
+                time.sleep(3)
+
+            # Winner might have failed too — I'll take over
+            print(f"  ⚠ El ganador ({lowest_id[:8]}) no respondió. Asumiendo coordinación...")
+
+        else:
+            # I have the lowest ID — wait a moment for stability
+            print(f"  👑 Mi ID es el más bajo — seré el nuevo coordinador")
+            time.sleep(ELECTION_TIMEOUT)
+
+            if not self.running:
+                return
+
+            # Double-check coordinator didn't come back
+            if time.time() - self.coordinator_last_seen < COORDINATOR_TIMEOUT:
+                print(f"  ✅ Coordinador respondió — elección cancelada")
+                self.election_in_progress = False
+                return
+
+        # Become the new coordinator
         print(f"\n  👑 ¡Este nodo es el nuevo coordinador!")
         self._become_coordinator()
 

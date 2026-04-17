@@ -155,6 +155,7 @@ class WorkerInfo:
         self.hostname = hostname
         self.pid = pid
         self.cpu_count = cpu_count
+        self.local_ip = ""          # Worker's LAN IP (sent in REGISTER)
         self.last_heartbeat = time.time()
         self.registered_at = time.time()
         self.connected = True
@@ -456,6 +457,9 @@ class DistributedCoordinator:
                 cpu_count=data.get("cpu_count", 1),
                 gpu_info=gpu_info,
             )
+            # Save worker's IP if provided
+            if data.get("local_ip"):
+                self.workers[node_id].local_ip = data["local_ip"]
         gpu_status = f"GPU: {gpu_info.get('name', 'N/A')}" if gpu_info.get("available") else "Sin GPU"
         print(f"  ✅ Worker registrado: {node_name} ({node_id}) "
               f"desde {data.get('hostname', '?')} — {gpu_status}", flush=True)
@@ -889,6 +893,7 @@ class DistributedCoordinator:
                 workers_state[nid] = {
                     "node_name": w.node_name,
                     "hostname": w.hostname,
+                    "local_ip": w.local_ip,
                     "connected": w.connected,
                     "enabled": w.enabled,
                     "gpu_work_group_size": w.gpu_work_group_size,
@@ -934,6 +939,7 @@ class DistributedCoordinator:
                 nid: {
                     "name": w.node_name,
                     "hostname": w.hostname,
+                    "local_ip": w.local_ip,
                     "connected": w.connected,
                     "enabled": w.enabled,
                 }
