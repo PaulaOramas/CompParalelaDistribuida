@@ -1621,25 +1621,30 @@ class DistributedCoordinator:
 
     def _resolve_file(self, filepath: str) -> Path | None:
         """Resolve a file path for failover recovery.
-        Tries: 1) absolute path, 2) by filename in project dir, 3) recursive search."""
+        Tries: 1) absolute path, 2) by filename in project dir, 3) recursive search.
+        Handles cross-platform paths (Windows paths on Linux and vice versa)."""
         p = Path(filepath)
         if p.exists():
             return p
 
+        # Extract filename handling both Windows and Unix separators
+        # On Linux, Path("C:\\Users\\file.fna").name returns the whole string
+        filename = filepath.replace("\\", "/").split("/")[-1]
+
         # Try by filename in this project's directory
         project_dir = Path(__file__).parent
-        local = project_dir / p.name
+        local = project_dir / filename
         if local.exists():
             print(f"  📂 Archivo encontrado en directorio local: {local}")
             return local
 
         # Recursive search in project dir (1 level deep)
         for child in project_dir.iterdir():
-            if child.is_file() and child.name == p.name:
+            if child.is_file() and child.name == filename:
                 print(f"  📂 Archivo encontrado: {child}")
                 return child
             if child.is_dir():
-                candidate = child / p.name
+                candidate = child / filename
                 if candidate.exists():
                     print(f"  📂 Archivo encontrado: {candidate}")
                     return candidate
