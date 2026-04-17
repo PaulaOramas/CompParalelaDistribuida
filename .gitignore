@@ -1,2 +1,3 @@
 *.fna
 venv/
+*.so
