@@ -1,0 +1,2178 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🧬 DNA Distributed Checker v2.0 — Panel de Control</title>
+    <meta name="description" content="Sistema distribuido de comparación de ADN con GPU, failover y gestión de nodos en tiempo real">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0e1a;
+            --bg-secondary: #0f1425;
+            --bg-card: #141929;
+            --bg-card-hover: #191f35;
+            --bg-input: #1a2038;
+            --border: #1e2642;
+            --border-active: #3b5bdb;
+            --text-primary: #e8eaf0;
+            --text-secondary: #8892a8;
+            --text-muted: #5a6380;
+            --accent: #4c6ef5;
+            --accent-glow: rgba(76, 110, 245, 0.3);
+            --accent-hover: #5c7cff;
+            --success: #40c057;
+            --success-bg: rgba(64, 192, 87, 0.1);
+            --warning: #fcc419;
+            --warning-bg: rgba(252, 196, 25, 0.1);
+            --danger: #fa5252;
+            --danger-bg: rgba(250, 82, 82, 0.1);
+            --info: #22b8cf;
+            --info-bg: rgba(34, 184, 207, 0.1);
+            --purple: #9775fa;
+            --purple-bg: rgba(151, 117, 250, 0.1);
+            --gradient-1: linear-gradient(135deg, #4c6ef5, #7c3aed);
+            --gradient-2: linear-gradient(135deg, #0ea5e9, #3b82f6);
+            --gradient-3: linear-gradient(135deg, #10b981, #06b6d4);
+            --gradient-node: linear-gradient(135deg, #6366f1, #a855f7);
+            --gradient-gpu: linear-gradient(135deg, #f59e0b, #ef4444);
+            --shadow-sm: 0 2px 8px rgba(0,0,0,0.3);
+            --shadow-md: 0 4px 20px rgba(0,0,0,0.4);
+            --shadow-lg: 0 8px 40px rgba(0,0,0,0.5);
+            --shadow-glow: 0 0 30px rgba(76, 110, 245, 0.15);
+            --radius: 12px;
+            --radius-lg: 16px;
+            --transition: 0.2s ease;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background:
+                radial-gradient(ellipse at 20% 50%, rgba(76, 110, 245, 0.05) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 20%, rgba(124, 58, 237, 0.04) 0%, transparent 50%),
+                radial-gradient(ellipse at 50% 80%, rgba(6, 182, 212, 0.03) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* Header */
+        .header {
+            background: rgba(15, 20, 37, 0.85);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 32px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-content {
+            max-width: 1600px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .logo {
+            width: 44px;
+            height: 44px;
+            background: var(--gradient-1);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            box-shadow: 0 4px 15px rgba(76, 110, 245, 0.3);
+        }
+
+        .header-title {
+            font-size: 20px;
+            font-weight: 700;
+            background: var(--gradient-1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.3px;
+        }
+
+        .header-subtitle {
+            font-size: 12px;
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+
+        .header-badges {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .badge-info { background: var(--info-bg); color: var(--info); border: 1px solid rgba(34, 184, 207, 0.2); }
+        .badge-success { background: var(--success-bg); color: var(--success); border: 1px solid rgba(64, 192, 87, 0.2); }
+        .badge-warning { background: var(--warning-bg); color: var(--warning); border: 1px solid rgba(252, 196, 25, 0.2); }
+        .badge-danger { background: var(--danger-bg); color: var(--danger); border: 1px solid rgba(250, 82, 82, 0.2); }
+        .badge-purple { background: var(--purple-bg); color: var(--purple); border: 1px solid rgba(151, 117, 250, 0.2); }
+
+        .pulse-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: var(--success);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(0.8); }
+        }
+
+        .main {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 24px 32px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .section-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 16px;
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .section-title .icon {
+            width: 32px; height: 32px; border-radius: 8px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 16px;
+        }
+
+        .section-title .icon-nodes { background: rgba(99, 102, 241, 0.15); }
+        .section-title .icon-compare { background: rgba(16, 185, 129, 0.15); }
+        .section-title .icon-results { background: rgba(245, 158, 11, 0.15); }
+        .section-title .icon-gpu { background: rgba(245, 158, 11, 0.15); }
+
+        /* ─── Nodes Grid ──────────────────────────────────────────── */
+        .nodes-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+
+        .node-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            transition: all var(--transition);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .node-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+            background: var(--gradient-node);
+            opacity: 0;
+            transition: opacity var(--transition);
+        }
+
+        .node-card:hover {
+            border-color: rgba(99, 102, 241, 0.3);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .node-card:hover::before { opacity: 1; }
+
+        .node-card.disconnected {
+            opacity: 0.4;
+            border-color: rgba(250, 82, 82, 0.3);
+        }
+
+        .node-card.disconnected::before {
+            background: var(--danger);
+            opacity: 1;
+        }
+
+        .node-card.disabled {
+            opacity: 0.6;
+            border-color: rgba(252, 196, 25, 0.3);
+        }
+
+        .node-card.disabled::before {
+            background: var(--warning);
+            opacity: 1;
+        }
+
+        .node-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 14px;
+        }
+
+        .node-name {
+            font-size: 15px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .node-status-dot {
+            width: 10px; height: 10px; border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .node-status-dot.online {
+            background: var(--success);
+            box-shadow: 0 0 8px rgba(64, 192, 87, 0.5);
+            animation: pulse 2s infinite;
+        }
+
+        .node-status-dot.offline {
+            background: var(--danger);
+            box-shadow: 0 0 8px rgba(250, 82, 82, 0.5);
+        }
+
+        .node-status-dot.paused {
+            background: var(--warning);
+            box-shadow: 0 0 8px rgba(252, 196, 25, 0.5);
+        }
+
+        .node-id {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            color: var(--text-muted);
+            background: rgba(255,255,255,0.05);
+            padding: 2px 8px;
+            border-radius: 4px;
+        }
+
+        .node-details {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .node-detail { font-size: 12px; }
+
+        .node-detail-label {
+            color: var(--text-muted);
+            display: block;
+            margin-bottom: 2px;
+        }
+
+        .node-detail-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+
+        .node-gpu-badge {
+            margin-top: 10px;
+            padding: 8px 12px;
+            background: rgba(245, 158, 11, 0.08);
+            border: 1px solid rgba(245, 158, 11, 0.15);
+            border-radius: 8px;
+            font-size: 11px;
+        }
+
+        .node-gpu-badge .gpu-label {
+            color: var(--warning);
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .node-gpu-badge .gpu-info {
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .node-actions {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .node-processing {
+            margin-top: 8px;
+        }
+
+        .node-processing-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .node-processing-badge.active {
+            background: rgba(76, 110, 245, 0.15);
+            color: var(--accent);
+        }
+
+        .node-processing-badge.idle {
+            background: rgba(255,255,255,0.05);
+            color: var(--text-muted);
+        }
+
+        .no-nodes {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+        }
+
+        .no-nodes-icon { font-size: 48px; margin-bottom: 16px; opacity: 0.5; }
+
+        .no-nodes-text {
+            font-size: 15px;
+            margin-bottom: 8px;
+            color: var(--text-secondary);
+        }
+
+        .no-nodes-hint {
+            font-size: 13px;
+            font-family: 'JetBrains Mono', monospace;
+            background: var(--bg-input);
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+        }
+
+        /* ─── Buttons ───────────────────────────────────────────── */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 8px 14px;
+            border: none;
+            border-radius: 8px;
+            font-family: 'Inter', sans-serif;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all var(--transition);
+            white-space: nowrap;
+        }
+
+        .btn-icon { padding: 8px 10px; font-size: 14px; }
+
+        .btn-primary {
+            background: var(--gradient-1);
+            color: white;
+            box-shadow: 0 2px 12px rgba(76, 110, 245, 0.3);
+        }
+        .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 20px rgba(76, 110, 245, 0.4); }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+        .btn-secondary {
+            background: var(--bg-input);
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+        }
+        .btn-secondary:hover { border-color: var(--accent); color: var(--text-primary); }
+
+        .btn-success {
+            background: var(--gradient-3);
+            color: white;
+            box-shadow: 0 2px 12px rgba(16, 185, 129, 0.3);
+        }
+        .btn-success:hover { transform: translateY(-1px); box-shadow: 0 4px 20px rgba(16, 185, 129, 0.4); }
+
+        .btn-warning {
+            background: var(--warning);
+            color: #000;
+        }
+        .btn-warning:hover { opacity: 0.9; }
+
+        .btn-danger {
+            background: transparent;
+            color: var(--danger);
+            border: 1px solid rgba(250, 82, 82, 0.3);
+        }
+        .btn-danger:hover { background: var(--danger-bg); border-color: var(--danger); }
+
+        .btn-sm { padding: 5px 10px; font-size: 11px; border-radius: 6px; }
+
+        .btn-toggle {
+            background: var(--success-bg);
+            color: var(--success);
+            border: 1px solid rgba(64, 192, 87, 0.3);
+        }
+        .btn-toggle.off {
+            background: var(--warning-bg);
+            color: var(--warning);
+            border-color: rgba(252, 196, 25, 0.3);
+        }
+
+        /* ─── Compare Panel ──────────────────────────────────────── */
+        .compare-panel {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            margin-bottom: 32px;
+        }
+
+        @media (max-width: 900px) { .compare-panel { grid-template-columns: 1fr; } }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 24px;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .card-title {
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .file-input-group { margin-bottom: 16px; }
+
+        .file-input-label {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+        }
+
+        .file-input-row { display: flex; gap: 8px; }
+
+        .file-input {
+            flex: 1;
+            padding: 10px 14px;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            outline: none;
+            transition: border-color var(--transition);
+        }
+
+        .file-input:focus { border-color: var(--accent); }
+
+        /* Distribution controls */
+        .dist-controls { margin-top: 16px; }
+
+        .dist-label {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 10px;
+            display: block;
+        }
+
+        .dist-options {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .dist-option {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 14px;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all var(--transition);
+        }
+
+        .dist-option:hover, .dist-option.selected {
+            border-color: var(--accent);
+            background: rgba(76, 110, 245, 0.05);
+        }
+
+        .dist-option.selected { box-shadow: 0 0 0 1px var(--accent); }
+
+        .dist-option input[type="radio"] {
+            accent-color: var(--accent);
+            width: 16px; height: 16px;
+        }
+
+        .dist-option-text { flex: 1; }
+        .dist-option-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+        .dist-option-desc { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+        .target-node-select {
+            margin-top: 8px;
+            padding: 8px 12px;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-family: 'Inter', sans-serif;
+            font-size: 13px;
+            width: 100%;
+            outline: none;
+        }
+
+        .target-node-select:focus { border-color: var(--accent); }
+
+        .chunk-control {
+            margin-top: 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .chunk-control label {
+            font-size: 12px;
+            color: var(--text-muted);
+            white-space: nowrap;
+        }
+
+        .chunk-input {
+            width: 120px;
+            padding: 6px 10px;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            outline: none;
+        }
+
+        .chunk-input:focus { border-color: var(--accent); }
+
+        .start-section {
+            margin-top: 20px;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .btn-start {
+            flex: 1;
+            padding: 14px 24px;
+            font-size: 15px;
+            font-weight: 700;
+        }
+
+        /* ─── GPU Config Modal ──────────────────────────────────── */
+        .gpu-config-section {
+            margin-top: 10px;
+        }
+
+        .gpu-config-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-top: 6px;
+        }
+
+        .gpu-config-row label {
+            font-size: 11px;
+            color: var(--text-muted);
+            min-width: 80px;
+        }
+
+        .gpu-config-row input {
+            width: 80px;
+            padding: 4px 8px;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            outline: none;
+        }
+
+        .gpu-config-row input:focus { border-color: var(--accent); }
+
+        .gpu-config-row .hint {
+            font-size: 10px;
+            color: var(--text-muted);
+        }
+
+        /* ─── File Browser Modal ─────────────────────────────────── */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(4px);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-overlay.active { display: flex; }
+
+        .modal {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            width: 560px;
+            max-height: 80vh;
+            box-shadow: var(--shadow-lg);
+            overflow: hidden;
+            animation: modalIn 0.2s ease;
+        }
+
+        @keyframes modalIn {
+            from { transform: scale(0.95); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+
+        .modal-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .modal-title { font-size: 15px; font-weight: 700; }
+
+        .modal-close {
+            background: none; border: none;
+            color: var(--text-muted);
+            font-size: 20px; cursor: pointer;
+            padding: 4px; line-height: 1;
+        }
+
+        .modal-close:hover { color: var(--text-primary); }
+
+        .modal-path {
+            padding: 10px 20px;
+            background: var(--bg-input);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: var(--text-secondary);
+            border-bottom: 1px solid var(--border);
+            overflow-x: auto;
+            white-space: nowrap;
+        }
+
+        .modal-body { max-height: 50vh; overflow-y: auto; }
+
+        .file-list { list-style: none; }
+
+        .file-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 20px;
+            cursor: pointer;
+            transition: background var(--transition);
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+        }
+
+        .file-item:hover { background: var(--bg-card-hover); }
+
+        .file-item-icon { font-size: 16px; width: 20px; text-align: center; }
+        .file-item-name { flex: 1; font-size: 13px; }
+        .file-item-size {
+            font-size: 11px; color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* ─── Results Panel ─────────────────────────────────────── */
+        .results-section { margin-bottom: 32px; }
+
+        .results-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+        }
+
+        .results-header {
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .results-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .spinner {
+            width: 20px; height: 20px;
+            border: 2px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .results-body { padding: 24px; }
+
+        .progress-section { margin-bottom: 24px; }
+
+        .progress-bar-wrapper {
+            height: 10px;
+            background: var(--bg-input);
+            border-radius: 5px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background: var(--gradient-1);
+            border-radius: 5px;
+            transition: width 0.5s ease;
+            position: relative;
+        }
+
+        .progress-bar::after {
+            content: '';
+            position: absolute; inset: 0;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.15), transparent);
+            animation: shimmer 1.5s infinite;
+        }
+
+        @keyframes shimmer {
+            from { transform: translateX(-100%); }
+            to { transform: translateX(100%); }
+        }
+
+        .progress-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+        }
+
+        .stat-box {
+            padding: 14px;
+            background: var(--bg-input);
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 22px;
+            font-weight: 800;
+            font-family: 'JetBrains Mono', monospace;
+            letter-spacing: -0.5px;
+        }
+
+        .stat-value.accent { color: var(--accent); }
+        .stat-value.success { color: var(--success); }
+        .stat-value.warning { color: var(--warning); }
+        .stat-value.info { color: var(--info); }
+
+        .stat-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .node-stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 12px;
+            margin-top: 20px;
+        }
+
+        .node-stat-card {
+            padding: 16px;
+            background: var(--bg-input);
+            border-radius: 10px;
+            border-left: 3px solid var(--accent);
+        }
+
+        .node-stat-name {
+            font-size: 13px;
+            font-weight: 700;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .node-stat-details {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+            font-size: 11px;
+        }
+
+        .node-stat-item { display: flex; flex-direction: column; }
+        .node-stat-item-label { color: var(--text-muted); }
+        .node-stat-item-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+
+        /* Similarity gauge */
+        .similarity-gauge { text-align: center; padding: 30px; }
+
+        .gauge-circle {
+            width: 180px; height: 180px;
+            margin: 0 auto 20px;
+            position: relative;
+        }
+
+        .gauge-circle svg {
+            width: 100%; height: 100%;
+            transform: rotate(-90deg);
+        }
+
+        .gauge-bg { fill: none; stroke: var(--bg-input); stroke-width: 10; }
+
+        .gauge-fill {
+            fill: none;
+            stroke: url(#gaugeGradient);
+            stroke-width: 10;
+            stroke-linecap: round;
+            transition: stroke-dashoffset 1s ease;
+        }
+
+        .gauge-text {
+            position: absolute; inset: 0;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+        }
+
+        .gauge-value {
+            font-size: 36px; font-weight: 800;
+            font-family: 'JetBrains Mono', monospace;
+            background: var(--gradient-1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .gauge-label {
+            font-size: 12px; color: var(--text-muted);
+            text-transform: uppercase; letter-spacing: 1px;
+        }
+
+        /* Log */
+        .log-section { margin-top: 20px; }
+
+        .log-container {
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            max-height: 200px;
+            overflow-y: auto;
+            padding: 12px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            line-height: 1.8;
+        }
+
+        .log-entry { color: var(--text-muted); }
+        .log-entry.info { color: var(--info); }
+        .log-entry.success { color: var(--success); }
+        .log-entry.warning { color: var(--warning); }
+        .log-entry.error { color: var(--danger); }
+
+        /* Connection info */
+        .connection-info {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px 20px;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .connection-info-text {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .connection-info-cmd {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            background: var(--bg-input);
+            padding: 8px 16px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            color: var(--accent);
+            user-select: all;
+        }
+
+        /* Coordinator GPU info */
+        .coord-gpu-info {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px 20px;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .coord-gpu-stat {
+            text-align: center;
+        }
+
+        .coord-gpu-stat .value {
+            font-size: 18px;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--warning);
+        }
+
+        .coord-gpu-stat .label {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+        /* Tab navigation */
+        .tab-nav {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 16px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 4px;
+            width: fit-content;
+        }
+
+        .tab-btn {
+            padding: 10px 24px;
+            border: none;
+            border-radius: 8px;
+            font-family: 'Inter', sans-serif;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            background: transparent;
+            color: var(--text-muted);
+            transition: all var(--transition);
+        }
+
+        .tab-btn:hover { color: var(--text-primary); }
+
+        .tab-btn.active {
+            background: var(--gradient-1);
+            color: white;
+            box-shadow: 0 2px 12px rgba(76, 110, 245, 0.3);
+        }
+
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        /* Error details table */
+        .error-table-wrapper {
+            max-height: 400px;
+            overflow-y: auto;
+            margin-top: 16px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+
+        .error-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .error-table th {
+            position: sticky;
+            top: 0;
+            background: var(--bg-card);
+            padding: 10px 14px;
+            text-align: left;
+            color: var(--text-secondary);
+            font-weight: 600;
+            border-bottom: 2px solid var(--border);
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 0.5px;
+        }
+
+        .error-table td {
+            padding: 8px 14px;
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+            color: var(--text-primary);
+        }
+
+        .error-table tr:hover td {
+            background: var(--bg-card-hover);
+        }
+
+        .error-char {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            background: rgba(250, 82, 82, 0.15);
+            border: 1px solid rgba(250, 82, 82, 0.3);
+            border-radius: 6px;
+            color: var(--danger);
+            font-weight: 700;
+            font-size: 13px;
+        }
+
+        .error-count-big {
+            font-size: 48px;
+            font-weight: 800;
+            font-family: 'JetBrains Mono', monospace;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .error-count-big.has-errors { color: var(--danger); }
+        .error-count-big.no-errors { color: var(--success); }
+
+        /* CPU config row */
+        .cpu-config-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-top: 6px;
+        }
+
+        .cpu-config-row label {
+            font-size: 11px;
+            color: var(--text-muted);
+            min-width: 80px;
+        }
+
+        .cpu-config-row input {
+            width: 70px;
+            padding: 4px 8px;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            outline: none;
+        }
+
+        .cpu-config-row input:focus { border-color: var(--accent); }
+        .cpu-config-row .hint { font-size: 10px; color: var(--text-muted); }
+    </style>
+</head>
+<body>
+
+    <!-- Header -->
+    <header class="header">
+        <div class="header-content">
+            <div class="header-left">
+                <div class="logo">🧬</div>
+                <div>
+                    <div class="header-title">DNA Distributed Checker v2.0</div>
+                    <div class="header-subtitle">Lectura CPU · Procesamiento GPU · Failover Automático</div>
+                </div>
+            </div>
+            <div class="header-badges">
+                <span class="badge badge-info">
+                    <span class="pulse-dot"></span>
+                    Coordinador: {{ coordinator_id }}
+                </span>
+                <span class="badge badge-success" id="badge-workers">
+                    🖥️ Workers: 0
+                </span>
+                <span class="badge badge-purple" id="badge-enabled">
+                    ✅ Activos: 0
+                </span>
+                <span class="badge badge-info">
+                    📍 {{ local_ip }}:{{ zmq_port }}
+                </span>
+            </div>
+        </div>
+    </header>
+
+    <main class="main">
+        <!-- Connection Info -->
+        <div class="connection-info">
+            <div class="connection-info-text">
+                Para conectar un worker a este coordinador, ejecuta:
+            </div>
+            <code class="connection-info-cmd">
+                python dna_distributed_node.py --coordinator {{ local_ip }}:{{ zmq_port }}
+            </code>
+        </div>
+
+        <!-- Coordinator GPU Info -->
+        {% if gpu_available %}
+        <div class="coord-gpu-info">
+            <div style="font-size:14px; font-weight:700; color:var(--warning);">🎮 GPU Coordinador:</div>
+            <div class="coord-gpu-stat">
+                <div class="value">{{ gpu_name }}</div>
+                <div class="label">GPU</div>
+            </div>
+            <div class="coord-gpu-stat">
+                <div class="value">{{ gpu_compute_units }}</div>
+                <div class="label">Compute Units</div>
+            </div>
+            <div class="coord-gpu-stat">
+                <div class="value">{{ gpu_max_work_group }}</div>
+                <div class="label">Max Work Group</div>
+            </div>
+            <div class="coord-gpu-stat">
+                <div class="value">{{ (gpu_global_mem / (1024*1024))|int }} MB</div>
+                <div class="label">Memoria GPU</div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Nodes Section -->
+        <div class="section-title">
+            <div class="icon icon-nodes">🖥️</div>
+            <span>Nodos Conectados</span>
+            <span class="badge badge-info" id="active-workers-badge" style="margin-left:auto;">0 conectados</span>
+        </div>
+        <div class="nodes-grid" id="nodes-grid">
+            <div class="no-nodes">
+                <div class="no-nodes-icon">📡</div>
+                <div class="no-nodes-text">No hay workers conectados</div>
+                <div class="no-nodes-hint">
+                    python dna_distributed_node.py -c {{ local_ip }}:{{ zmq_port }}
+                </div>
+            </div>
+        </div>
+
+        <!-- Mode Tabs -->
+        <div class="section-title">
+            <div class="icon icon-compare">🔬</div>
+            <span>Procesamiento de ADN</span>
+            <span class="badge badge-info" style="margin-left:auto;">📖 Lectura: CPU · ⚡ Procesamiento: GPU</span>
+        </div>
+        <div class="tab-nav">
+            <button class="tab-btn active" onclick="switchTab('compare')">🔬 Comparar</button>
+            <button class="tab-btn" onclick="switchTab('analyze')">🔍 Validar Errores</button>
+        </div>
+
+        <!-- Compare Tab -->
+        <div class="tab-content active" id="tab-compare">
+        <div class="compare-panel">
+            <!-- Left: File Selection -->
+            <div class="card">
+                <div class="card-title">📂 Archivos a Comparar</div>
+
+                <div class="file-input-group">
+                    <label class="file-input-label">Archivo ADN A:</label>
+                    <div class="file-input-row">
+                        <input type="text" class="file-input" id="filepath-a"
+                               placeholder="/ruta/al/archivo_a.fna">
+                        <button class="btn btn-secondary btn-icon"
+                                onclick="openBrowser('a')" title="Explorar">📁</button>
+                    </div>
+                </div>
+
+                <div class="file-input-group">
+                    <label class="file-input-label">Archivo ADN B:</label>
+                    <div class="file-input-row">
+                        <input type="text" class="file-input" id="filepath-b"
+                               placeholder="/ruta/al/archivo_b.fna">
+                        <button class="btn btn-secondary btn-icon"
+                                onclick="openBrowser('b')" title="Explorar">📁</button>
+                    </div>
+                </div>
+
+                <div class="chunk-control">
+                    <label>Líneas por chunk:</label>
+                    <input type="number" class="chunk-input" id="chunk-size"
+                           value="50000" min="1000" max="500000">
+                </div>
+
+                <div class="start-section">
+                    <button class="btn btn-success btn-start" id="btn-start"
+                            onclick="startCompare()" disabled>
+                        🚀 Iniciar Comparación Distribuida
+                    </button>
+                </div>
+            </div>
+
+            <!-- Right: Distribution Controls -->
+            <div class="card">
+                <div class="card-title">⚡ Distribución de Carga</div>
+
+                <div class="dist-controls">
+                    <span class="dist-label">Modo de distribución:</span>
+                    <div class="dist-options">
+                        <label class="dist-option selected" id="dist-all">
+                            <input type="radio" name="dist-mode" value="all" checked>
+                            <div class="dist-option-text">
+                                <div class="dist-option-title">🌐 Todos los nodos habilitados</div>
+                                <div class="dist-option-desc">Distribuye entre todos los workers activos y habilitados</div>
+                            </div>
+                        </label>
+
+                        <label class="dist-option" id="dist-specific">
+                            <input type="radio" name="dist-mode" value="specific">
+                            <div class="dist-option-text">
+                                <div class="dist-option-title">🎯 Nodo específico</div>
+                                <div class="dist-option-desc">Envía toda la carga a un solo nodo</div>
+                            </div>
+                        </label>
+
+                        <label class="dist-option" id="dist-exclude-master">
+                            <input type="radio" name="dist-mode" value="exclude_master">
+                            <div class="dist-option-text">
+                                <div class="dist-option-title">🚫 Excluir primer worker</div>
+                                <div class="dist-option-desc">Distribuye entre todos excepto el primer worker registrado</div>
+                            </div>
+                        </label>
+                    </div>
+
+                    <div id="target-node-wrapper" style="display:none; margin-top:12px;">
+                        <label class="file-input-label">Seleccionar nodo destino:</label>
+                        <select class="target-node-select" id="target-node">
+                            <option value="">-- Sin workers --</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+        </div>
+
+        <!-- Analyze Tab -->
+        <div class="tab-content" id="tab-analyze">
+        <div class="compare-panel">
+            <div class="card">
+                <div class="card-title">🔍 Validar Archivo ADN</div>
+                <p style="font-size:13px; color:var(--text-muted); margin-bottom:16px;">
+                    Detecta caracteres inválidos (≠ A, T, C, G, N) y muestra su posición exacta (línea y columna).
+                </p>
+
+                <div class="file-input-group">
+                    <label class="file-input-label">Archivo ADN a validar:</label>
+                    <div class="file-input-row">
+                        <input type="text" class="file-input" id="filepath-analyze"
+                               placeholder="/ruta/al/archivo.fna">
+                        <button class="btn btn-secondary btn-icon"
+                                onclick="openBrowser('analyze')" title="Explorar">📁</button>
+                    </div>
+                </div>
+
+                <div class="chunk-control">
+                    <label>Líneas por chunk:</label>
+                    <input type="number" class="chunk-input" id="chunk-size-analyze"
+                           value="50000" min="1000" max="500000">
+                </div>
+
+                <div class="start-section">
+                    <button class="btn btn-primary btn-start" id="btn-start-analyze"
+                            onclick="startAnalyze()" disabled>
+                        🔍 Iniciar Validación Distribuida
+                    </button>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">ℹ️ Información</div>
+                <div style="font-size:13px; color:var(--text-secondary); line-height:1.8;">
+                    <p>🧬 <strong>Caracteres válidos:</strong> A, T, C, G, N (mayúsculas y minúsculas)</p>
+                    <p>📖 <strong>Lectura:</strong> CPU (coordinador)</p>
+                    <p>⚡ <strong>Procesamiento:</strong> GPU (workers via OpenCL)</p>
+                    <p>📊 <strong>Resultado:</strong> Tabla con fila, columna y carácter inválido</p>
+                    <p style="margin-top:12px; color:var(--text-muted);">Se muestran hasta 500 errores. Usa la configuración de nodos para elegir cuántos núcleos CPU e hilos GPU usar por máquina.</p>
+                </div>
+            </div>
+        </div>
+        </div>
+
+        <!-- Results Section -->
+        <div class="results-section" id="results-section" style="display:none;">
+            <div class="section-title">
+                <div class="icon icon-results">📊</div>
+                <span>Resultados</span>
+            </div>
+            <div class="results-card">
+                <div class="results-header">
+                    <div class="results-status" id="results-status">
+                        <div class="spinner"></div>
+                        <span>Procesando...</span>
+                    </div>
+                    <div id="results-elapsed" class="badge badge-info">0.0s</div>
+                </div>
+                <div class="results-body">
+                    <!-- Similarity Gauge -->
+                    <div class="similarity-gauge" id="similarity-gauge" style="display:none;">
+                        <div class="gauge-circle">
+                            <svg viewBox="0 0 200 200">
+                                <defs>
+                                    <linearGradient id="gaugeGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                                        <stop offset="0%" stop-color="#4c6ef5"/>
+                                        <stop offset="100%" stop-color="#7c3aed"/>
+                                    </linearGradient>
+                                </defs>
+                                <circle class="gauge-bg" cx="100" cy="100" r="85"/>
+                                <circle class="gauge-fill" id="gauge-fill" cx="100" cy="100" r="85"
+                                    stroke-dasharray="534" stroke-dashoffset="534"/>
+                            </svg>
+                            <div class="gauge-text">
+                                <span class="gauge-value" id="gauge-value">0%</span>
+                                <span class="gauge-label">Coincidencia</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Progress -->
+                    <div class="progress-section" id="progress-section">
+                        <div class="progress-bar-wrapper">
+                            <div class="progress-bar" id="progress-bar" style="width: 0%"></div>
+                        </div>
+                        <div class="progress-stats" id="progress-stats">
+                            <div class="stat-box">
+                                <div class="stat-value accent" id="stat-chunks">0/0</div>
+                                <div class="stat-label">Chunks</div>
+                            </div>
+                            <div class="stat-box">
+                                <div class="stat-value info" id="stat-lines">0</div>
+                                <div class="stat-label">Líneas</div>
+                            </div>
+                            <div class="stat-box">
+                                <div class="stat-value success" id="stat-matches">0</div>
+                                <div class="stat-label">Coincidencias</div>
+                            </div>
+                            <div class="stat-box">
+                                <div class="stat-value warning" id="stat-similarity">0%</div>
+                                <div class="stat-label">Similitud</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Node Stats -->
+                    <div class="node-stats-grid" id="node-stats-grid"></div>
+
+                    <!-- Log -->
+                    <div class="log-section">
+                        <div class="card-title" style="font-size:12px;">📝 Log de eventos</div>
+                        <div class="log-container" id="log-container"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- File Browser Modal -->
+    <div class="modal-overlay" id="browser-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">📁 Explorador de Archivos</div>
+                <button class="modal-close" onclick="closeBrowser()">✕</button>
+            </div>
+            <div class="modal-path" id="browser-path">~</div>
+            <div class="modal-body">
+                <ul class="file-list" id="file-list"></ul>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ─── State ──────────────────────────────────────────────────────
+        let currentBrowserTarget = null;
+        let currentJob = null;
+        let eventSource = null;
+        let workerStream = null;
+        let workers = [];
+
+        // ─── Init ───────────────────────────────────────────────────────
+        document.addEventListener('DOMContentLoaded', () => {
+            startWorkerStream();
+            setupDistributionRadios();
+            setupFileInputs();
+        });
+
+        // ─── Worker Stream ──────────────────────────────────────────────
+        function startWorkerStream() {
+            if (workerStream) workerStream.close();
+            workerStream = new EventSource('/api/workers/stream');
+            workerStream.onmessage = (e) => {
+                const data = JSON.parse(e.data);
+                workers = data.workers || [];
+                renderNodes(workers);
+                updateWorkerBadge(data.active_count || 0, data.total_connected || 0);
+                updateTargetNodeSelect(workers);
+                updateStartButton();
+                updateAnalyzeButton();
+            };
+            workerStream.onerror = () => {
+                setTimeout(startWorkerStream, 3000);
+            };
+        }
+
+        function updateWorkerBadge(activeCount, totalConnected) {
+            document.getElementById('badge-workers').textContent = `🖥️ Workers: ${totalConnected}`;
+            document.getElementById('badge-enabled').textContent = `✅ Activos: ${activeCount}`;
+            document.getElementById('active-workers-badge').textContent = `${totalConnected} conectados`;
+        }
+
+        // ─── Render Nodes ───────────────────────────────────────────────
+        function renderNodes(workers) {
+            const grid = document.getElementById('nodes-grid');
+            if (!workers || workers.length === 0) {
+                grid.innerHTML = `
+                    <div class="no-nodes">
+                        <div class="no-nodes-icon">📡</div>
+                        <div class="no-nodes-text">No hay workers conectados</div>
+                        <div class="no-nodes-hint">
+                            python dna_distributed_node.py -c {{ local_ip }}:{{ zmq_port }}
+                        </div>
+                    </div>`;
+                return;
+            }
+
+            grid.innerHTML = workers.map(w => {
+                const cardClass = !w.connected ? 'disconnected' : (!w.enabled ? 'disabled' : '');
+                const dotClass = !w.connected ? 'offline' : (!w.enabled ? 'paused' : 'online');
+                const statusText = !w.connected ? '🔴 Desconectado' : (!w.enabled ? '⏸️ Deshabilitado' : '🟢 Activo');
+                const gpuMem = w.gpu_global_mem ? `${(w.gpu_global_mem / (1024*1024)).toFixed(0)} MB` : 'N/A';
+
+                return `
+                <div class="node-card ${cardClass}">
+                    <div class="node-header">
+                        <div class="node-name">
+                            <span class="node-status-dot ${dotClass}"></span>
+                            ${w.node_name}
+                        </div>
+                        <span class="node-id">${w.node_id}</span>
+                    </div>
+                    <div class="node-details">
+                        <div class="node-detail">
+                            <span class="node-detail-label">Host</span>
+                            <span class="node-detail-value">${w.hostname}</span>
+                        </div>
+                        <div class="node-detail">
+                            <span class="node-detail-label">Estado</span>
+                            <span class="node-detail-value">${statusText}</span>
+                        </div>
+                        <div class="node-detail">
+                            <span class="node-detail-label">CPUs</span>
+                            <span class="node-detail-value">${w.cpu_count}</span>
+                        </div>
+                        <div class="node-detail">
+                            <span class="node-detail-label">Heartbeat</span>
+                            <span class="node-detail-value">${w.time_since_heartbeat}s</span>
+                        </div>
+                        <div class="node-detail">
+                            <span class="node-detail-label">Chunks</span>
+                            <span class="node-detail-value">${w.chunks_processed}</span>
+                        </div>
+                        <div class="node-detail">
+                            <span class="node-detail-label">Líneas</span>
+                            <span class="node-detail-value">${formatNumber(w.total_lines)}</span>
+                        </div>
+                    </div>
+
+                    ${w.gpu_available ? `
+                    <div class="node-gpu-badge">
+                        <div class="gpu-label">🎮 ${w.gpu_name}</div>
+                        <div class="gpu-info">CUs: ${w.gpu_compute_units} · Max WG: ${w.gpu_max_work_group} · Mem: ${gpuMem}</div>
+                    </div>
+                    ` : `
+                    <div class="node-gpu-badge" style="border-color: rgba(250,82,82,0.15); background: rgba(250,82,82,0.05);">
+                        <div class="gpu-label" style="color: var(--danger);">❌ Sin GPU</div>
+                        <div class="gpu-info">Procesará con CPU (fallback)</div>
+                    </div>
+                    `}
+
+                    ${w.gpu_available ? `
+                    <div class="gpu-config-section">
+                        <div class="gpu-config-row">
+                            <label>Work Group:</label>
+                            <input type="number" id="wg-${w.node_id}" value="${w.gpu_work_group_size}"
+                                   min="1" max="${w.gpu_max_work_group}" style="width:70px;">
+                            <span class="hint">/ ${w.gpu_max_work_group}</span>
+                        </div>
+                        <div class="gpu-config-row">
+                            <label>CUs a usar:</label>
+                            <input type="number" id="cu-${w.node_id}" value="${w.gpu_compute_units_to_use}"
+                                   min="1" max="${w.gpu_compute_units}" style="width:70px;">
+                            <span class="hint">/ ${w.gpu_compute_units}</span>
+                            <button class="btn btn-sm btn-primary" onclick="saveGpuConfig('${w.node_id}')">💾</button>
+                        </div>
+                    </div>
+                    ` : ''}
+
+                    <div class="cpu-config-row" style="margin-top:8px;">
+                        <label>CPU Cores:</label>
+                        <input type="number" id="cores-${w.node_id}" value="${w.cpu_cores_to_use || w.cpu_count}"
+                               min="1" max="${w.cpu_count}" style="width:70px;">
+                        <span class="hint">/ ${w.cpu_count}</span>
+                        <button class="btn btn-sm btn-primary" onclick="saveCpuConfig('${w.node_id}')">💾</button>
+                    </div>
+
+                    <div class="node-processing">
+                        ${w.processing
+                            ? `<span class="node-processing-badge active">⚙️ Procesando chunk ${w.current_chunk || '...'}</span>`
+                            : `<span class="node-processing-badge idle">💤 Esperando</span>`
+                        }
+                    </div>
+
+                    <div class="node-actions">
+                        <button class="btn btn-sm btn-toggle ${w.enabled ? '' : 'off'}"
+                                onclick="toggleNode('${w.node_id}', ${!w.enabled})"
+                                title="${w.enabled ? 'Desactivar nodo' : 'Activar nodo'}">
+                            ${w.enabled ? '⏸️ Desactivar' : '▶️ Activar'}
+                        </button>
+                        <button class="btn btn-sm btn-danger"
+                                onclick="removeNode('${w.node_id}', '${w.node_name}')"
+                                title="Eliminar nodo">
+                            🗑️ Eliminar
+                        </button>
+                    </div>
+                </div>
+                `;
+            }).join('');
+        }
+
+        // ─── Node Actions ───────────────────────────────────────────────
+        async function toggleNode(nodeId, enabled) {
+            try {
+                const res = await fetch(`/api/workers/${nodeId}/toggle`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({enabled}),
+                });
+                const data = await res.json();
+                if (!res.ok) alert(`Error: ${data.error}`);
+            } catch (err) {
+                alert(`Error de conexión: ${err.message}`);
+            }
+        }
+
+        async function removeNode(nodeId, nodeName) {
+            if (!confirm(`¿Eliminar el nodo "${nodeName}" (${nodeId})?`)) return;
+            try {
+                const res = await fetch(`/api/workers/${nodeId}/remove`, {
+                    method: 'DELETE',
+                });
+                const data = await res.json();
+                if (!res.ok) alert(`Error: ${data.error}`);
+            } catch (err) {
+                alert(`Error de conexión: ${err.message}`);
+            }
+        }
+
+        async function saveGpuConfig(nodeId) {
+            const wgInput = document.getElementById(`wg-${nodeId}`);
+            const cuInput = document.getElementById(`cu-${nodeId}`);
+            if (!wgInput || !cuInput) return;
+
+            try {
+                const res = await fetch(`/api/workers/${nodeId}/gpu-config`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        work_group_size: parseInt(wgInput.value),
+                        compute_units: parseInt(cuInput.value),
+                    }),
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    wgInput.style.borderColor = 'var(--success)';
+                    cuInput.style.borderColor = 'var(--success)';
+                    setTimeout(() => {
+                        wgInput.style.borderColor = '';
+                        cuInput.style.borderColor = '';
+                    }, 1500);
+                } else {
+                    alert(`Error: ${data.error}`);
+                }
+            } catch (err) {
+                alert(`Error de conexión: ${err.message}`);
+            }
+        }
+
+        // ─── Distribution Radios ────────────────────────────────────────
+        function setupDistributionRadios() {
+            document.querySelectorAll('input[name="dist-mode"]').forEach(radio => {
+                radio.addEventListener('change', () => {
+                    document.querySelectorAll('.dist-option').forEach(opt => opt.classList.remove('selected'));
+                    radio.closest('.dist-option').classList.add('selected');
+                    const wrapper = document.getElementById('target-node-wrapper');
+                    wrapper.style.display = radio.value === 'specific' ? 'block' : 'none';
+                });
+            });
+        }
+
+        function updateTargetNodeSelect(workers) {
+            const select = document.getElementById('target-node');
+            const connected = workers.filter(w => w.connected && w.enabled);
+            if (connected.length === 0) {
+                select.innerHTML = '<option value="">-- Sin workers habilitados --</option>';
+                return;
+            }
+            select.innerHTML = connected.map(w =>
+                `<option value="${w.node_id}">${w.node_name} (${w.hostname}) ${w.gpu_available ? '🎮' : '💻'}</option>`
+            ).join('');
+        }
+
+        // ─── File Inputs ────────────────────────────────────────────────
+        function setupFileInputs() {
+            ['filepath-a', 'filepath-b'].forEach(id => {
+                document.getElementById(id).addEventListener('input', updateStartButton);
+            });
+            document.getElementById('filepath-analyze').addEventListener('input', updateAnalyzeButton);
+        }
+
+        function updateStartButton() {
+            const a = document.getElementById('filepath-a').value.trim();
+            const b = document.getElementById('filepath-b').value.trim();
+            const hasWorkers = workers.some(w => w.connected && w.enabled);
+            document.getElementById('btn-start').disabled = !(a && b && hasWorkers);
+        }
+
+        function updateAnalyzeButton() {
+            const f = document.getElementById('filepath-analyze').value.trim();
+            const hasWorkers = workers.some(w => w.connected && w.enabled);
+            document.getElementById('btn-start-analyze').disabled = !(f && hasWorkers);
+        }
+
+        // ─── File Browser ───────────────────────────────────────────────
+        function openBrowser(target) {
+            currentBrowserTarget = target;
+            document.getElementById('browser-modal').classList.add('active');
+            browsePath('~');
+        }
+
+        function closeBrowser() {
+            document.getElementById('browser-modal').classList.remove('active');
+        }
+
+        async function browsePath(path) {
+            const res = await fetch('/api/browse', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({path}),
+            });
+            const data = await res.json();
+            document.getElementById('browser-path').textContent = data.current;
+
+            const list = document.getElementById('file-list');
+            list.innerHTML = data.entries.map(e => `
+                <li class="file-item" onclick="${e.is_dir ? `browsePath('${e.path.replace(/'/g, "\\'")}')` : `selectFile('${e.path.replace(/'/g, "\\'")}')`}">
+                    <span class="file-item-icon">${e.is_dir ? '📁' : '📄'}</span>
+                    <span class="file-item-name">${e.name}</span>
+                    <span class="file-item-size">${e.is_dir ? '' : formatBytes(e.size)}</span>
+                </li>
+            `).join('');
+        }
+
+        function selectFile(path) {
+            if (currentBrowserTarget === 'analyze') {
+                document.getElementById('filepath-analyze').value = path;
+                updateAnalyzeButton();
+            } else {
+                document.getElementById(`filepath-${currentBrowserTarget}`).value = path;
+                updateStartButton();
+            }
+            closeBrowser();
+        }
+
+        // ─── Start Compare ──────────────────────────────────────────────
+        async function startCompare() {
+            const filepathA = document.getElementById('filepath-a').value.trim();
+            const filepathB = document.getElementById('filepath-b').value.trim();
+            const distMode = document.querySelector('input[name="dist-mode"]:checked').value;
+            const targetNode = document.getElementById('target-node').value;
+            const chunkSize = parseInt(document.getElementById('chunk-size').value) || 50000;
+
+            document.getElementById('results-section').style.display = 'block';
+            document.getElementById('similarity-gauge').style.display = 'none';
+            document.getElementById('progress-bar').style.width = '0%';
+            document.getElementById('node-stats-grid').innerHTML = '';
+            document.getElementById('log-container').innerHTML = '';
+            document.getElementById('results-status').innerHTML = '<div class="spinner"></div><span>Iniciando...</span>';
+
+            addLog('info', `📖 Lectura de archivos con CPU`);
+            addLog('info', `⚡ Procesamiento distribuido con GPU`);
+            addLog('info', `Iniciando: ${filepathA} vs ${filepathB}`);
+            addLog('info', `Modo: ${distMode}`);
+
+            document.getElementById('btn-start').disabled = true;
+
+            try {
+                const res = await fetch('/api/compare', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        filepath_a: filepathA,
+                        filepath_b: filepathB,
+                        distribution_mode: distMode,
+                        target_node: targetNode,
+                        chunk_size: chunkSize,
+                    }),
+                });
+
+                const data = await res.json();
+
+                if (!res.ok) {
+                    addLog('error', `Error: ${data.error}`);
+                    document.getElementById('results-status').innerHTML = `<span style="color:var(--danger)">❌ Error</span>`;
+                    document.getElementById('btn-start').disabled = false;
+                    return;
+                }
+
+                currentJob = data.job_id;
+                addLog('success', `Job creado: ${data.job_id.substring(0, 8)}...`);
+                addLog('info', `Workers asignados: ${data.workers.length}`);
+
+                startJobStream(data.job_id);
+
+            } catch (err) {
+                addLog('error', `Error de conexión: ${err.message}`);
+                document.getElementById('results-status').innerHTML = `<span style="color:var(--danger)">❌ Error</span>`;
+                document.getElementById('btn-start').disabled = false;
+            }
+        }
+
+        // ─── Job Stream ─────────────────────────────────────────────────
+        function startJobStream(jobId) {
+            if (eventSource) eventSource.close();
+            eventSource = new EventSource(`/api/stream/${jobId}`);
+
+            eventSource.onmessage = (e) => {
+                const event = JSON.parse(e.data);
+                handleJobEvent(event);
+            };
+
+            eventSource.onerror = () => {
+                addLog('warning', 'Conexión SSE interrumpida');
+            };
+        }
+
+        function handleJobEvent(event) {
+            switch (event.type) {
+                case 'status':
+                    const statusMap = {
+                        reading: '📖 Leyendo archivos (CPU)...',
+                        distributing: '📦 Distribuyendo chunks...',
+                        processing: '⚡ Procesando (GPU)...',
+                    };
+                    const statusText = statusMap[event.data] || event.data;
+                    document.getElementById('results-status').innerHTML =
+                        `<div class="spinner"></div><span>${statusText}</span>`;
+                    addLog('info', statusText);
+                    break;
+
+                case 'info':
+                    const info = event.data;
+                    if (info.lines_a !== undefined) {
+                        addLog('info', `Archivo A: ${formatNumber(info.lines_a)} líneas`);
+                        addLog('info', `Archivo B: ${formatNumber(info.lines_b)} líneas`);
+                        addLog('info', `Líneas a comparar: ${formatNumber(info.lines_compared)}`);
+                    } else if (info.total_lines !== undefined) {
+                        addLog('info', `Archivo: ${info.filename}`);
+                        addLog('info', `Total líneas: ${formatNumber(info.total_lines)}`);
+                    }
+                    if (info.read_time) addLog('success', `📖 Lectura CPU: ${info.read_time}s`);
+                    if (info.workers) addLog('info', `Workers: ${info.workers.length}`);
+                    break;
+
+                case 'progress':
+                    updateProgress(event.data);
+                    break;
+
+                case 'done':
+                    handleDone(event.data);
+                    break;
+
+                case 'error':
+                    addLog('error', `Error: ${event.data}`);
+                    document.getElementById('results-status').innerHTML =
+                        `<span style="color:var(--danger)">❌ Error: ${event.data}</span>`;
+                    document.getElementById('btn-start').disabled = false;
+                    if (eventSource) eventSource.close();
+                    break;
+            }
+        }
+
+        function updateProgress(data) {
+            const pct = data.total_chunks > 0
+                ? (data.chunks_completed / data.total_chunks * 100)
+                : 0;
+
+            document.getElementById('progress-bar').style.width = `${pct}%`;
+            document.getElementById('stat-chunks').textContent =
+                `${data.chunks_completed}/${data.total_chunks}`;
+            document.getElementById('stat-lines').textContent =
+                formatNumber(data.lines_processed);
+
+            // Handle both compare and analyze progress
+            if (data.total_errors !== undefined) {
+                document.getElementById('stat-matches').textContent =
+                    formatNumber(data.total_errors) + ' err';
+                document.getElementById('stat-similarity').textContent =
+                    data.total_errors === 0 ? '✅' : '⚠️';
+            } else {
+                document.getElementById('stat-matches').textContent =
+                    formatNumber(data.total_matches);
+                document.getElementById('stat-similarity').textContent =
+                    `${data.similarity}%`;
+            }
+
+            document.getElementById('results-elapsed').textContent =
+                `${data.elapsed}s`;
+
+            if (data.node_stats) {
+                renderNodeStats(data.node_stats);
+            }
+        }
+
+        function handleDone(data) {
+            if (eventSource) eventSource.close();
+            document.getElementById('btn-start').disabled = false;
+            document.getElementById('btn-start-analyze').disabled = false;
+
+            document.getElementById('results-status').innerHTML =
+                `<span style="color:var(--success)">✅ Completado</span>`;
+
+            // Check if this is an analyze job
+            if (data.job_type === 'analyze') {
+                handleAnalyzeDone(data);
+                return;
+            }
+
+            const gauge = document.getElementById('similarity-gauge');
+            gauge.style.display = 'block';
+
+            const similarity = data.similarity || 0;
+            const circumference = 2 * Math.PI * 85;
+            const offset = circumference - (similarity / 100) * circumference;
+            document.getElementById('gauge-fill').style.strokeDashoffset = offset;
+            document.getElementById('gauge-value').textContent = `${similarity}%`;
+
+            document.getElementById('progress-bar').style.width = '100%';
+            document.getElementById('stat-similarity').textContent = `${similarity}%`;
+            document.getElementById('stat-matches').textContent =
+                formatNumber(data.total_matches);
+            document.getElementById('results-elapsed').textContent =
+                `${data.elapsed}s`;
+
+            if (data.node_stats) {
+                renderNodeStats(data.node_stats);
+            }
+
+            addLog('success', `✅ Comparación completada: ${similarity}% coincidencia`);
+            addLog('info', `Total coincidencias: ${formatNumber(data.total_matches)} / ${formatNumber(data.total_compared)}`);
+            addLog('info', `Discrepancias: ${formatNumber(data.total_mismatches)}`);
+            addLog('info', `Tiempo total: ${data.elapsed}s`);
+            addLog('info', `Modo: ${data.distribution_mode}`);
+        }
+
+        function handleAnalyzeDone(data) {
+            document.getElementById('progress-bar').style.width = '100%';
+            document.getElementById('results-elapsed').textContent = `${data.elapsed}s`;
+
+            const gauge = document.getElementById('similarity-gauge');
+            gauge.style.display = 'block';
+            gauge.innerHTML = `
+                <div class="error-count-big ${data.total_errors > 0 ? 'has-errors' : 'no-errors'}">
+                    ${data.total_errors > 0 ? '⚠️' : '✅'}
+                    ${formatNumber(data.total_errors)}
+                </div>
+                <div style="text-align:center; color:var(--text-muted); font-size:13px; text-transform:uppercase; letter-spacing:1px;">
+                    ${data.total_errors > 0 ? 'Errores encontrados' : 'Sin errores — ADN válido'}
+                </div>
+                <div style="text-align:center; margin-top:8px; color:var(--text-secondary); font-size:12px;">
+                    ${formatNumber(data.lines_processed)} líneas procesadas en ${data.elapsed}s
+                </div>
+            `;
+
+            // Show error details table
+            if (data.error_details && data.error_details.length > 0) {
+                const tableHtml = `
+                    <div style="margin-top:20px;">
+                        <div class="card-title" style="font-size:12px;">📋 Detalle de errores (${data.error_details.length} de ${formatNumber(data.total_errors)})</div>
+                        <div class="error-table-wrapper">
+                            <table class="error-table">
+                                <thead>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Línea</th>
+                                        <th>Columna</th>
+                                        <th>Carácter</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${data.error_details.map((e, i) => `
+                                        <tr>
+                                            <td style="color:var(--text-muted)">${i+1}</td>
+                                            <td style="color:var(--accent); font-weight:600;">${formatNumber(e.row)}</td>
+                                            <td style="color:var(--warning); font-weight:600;">${e.col}</td>
+                                            <td><span class="error-char">${e.char === ' ' ? '␣' : e.char}</span></td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                `;
+                document.getElementById('node-stats-grid').insertAdjacentHTML('afterend', tableHtml);
+            }
+
+            if (data.node_stats) {
+                renderNodeStats(data.node_stats, true);
+            }
+
+            addLog('success', `✅ Validación completada: ${formatNumber(data.total_errors)} errores`);
+            addLog('info', `Líneas procesadas: ${formatNumber(data.lines_processed)}`);
+            addLog('info', `Tiempo total: ${data.elapsed}s`);
+        }
+
+        // ─── Node Stats Render ──────────────────────────────────────────
+        function renderNodeStats(nodeStats, isAnalyze = false) {
+            const grid = document.getElementById('node-stats-grid');
+            const colors = ['#4c6ef5', '#7c3aed', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
+
+            grid.innerHTML = Object.entries(nodeStats).map(([name, stats], i) => {
+                const sim = stats.compared > 0
+                    ? (stats.matches / stats.compared * 100).toFixed(2)
+                    : 0;
+                const gpuInfo = stats.gpu_metrics || {};
+                const hasGpu = gpuInfo.total_kernel_ms !== undefined;
+
+                const statsHtml = isAnalyze ? `
+                            <div class="node-stat-item">
+                                <span class="node-stat-item-label">Errores</span>
+                                <span class="node-stat-item-value" style="color:${stats.errors > 0 ? 'var(--danger)' : 'var(--success)'}">${formatNumber(stats.errors || 0)}</span>
+                            </div>
+                ` : `
+                            <div class="node-stat-item">
+                                <span class="node-stat-item-label">Coincidencias</span>
+                                <span class="node-stat-item-value">${formatNumber(stats.matches)}</span>
+                            </div>
+                            <div class="node-stat-item">
+                                <span class="node-stat-item-label">Similitud</span>
+                                <span class="node-stat-item-value">${sim}%</span>
+                            </div>
+                `;
+
+                return `
+                    <div class="node-stat-card" style="border-left-color: ${colors[i % colors.length]}">
+                        <div class="node-stat-name">
+                            <span style="color:${colors[i % colors.length]}">●</span>
+                            ${name}
+                            ${hasGpu ? '<span style="font-size:10px; color:var(--warning);">🎮 GPU</span>' : '<span style="font-size:10px; color:var(--text-muted);">💻 CPU</span>'}
+                        </div>
+                        <div class="node-stat-details">
+                            <div class="node-stat-item">
+                                <span class="node-stat-item-label">Chunks</span>
+                                <span class="node-stat-item-value">${stats.chunks}</span>
+                            </div>
+                            <div class="node-stat-item">
+                                <span class="node-stat-item-label">Líneas</span>
+                                <span class="node-stat-item-value">${formatNumber(stats.lines)}</span>
+                            </div>
+                            ${statsHtml}
+                            ${hasGpu ? `
+                            <div class="node-stat-item">
+                                <span class="node-stat-item-label">GPU Kernel</span>
+                                <span class="node-stat-item-value">${gpuInfo.total_kernel_ms?.toFixed(1) || 0}ms</span>
+                            </div>
+                            <div class="node-stat-item">
+                                <span class="node-stat-item-label">Tiempo CPU</span>
+                                <span class="node-stat-item-value">${stats.time?.toFixed(2) || 0}s</span>
+                            </div>
+                            ` : `
+                            <div class="node-stat-item">
+                                <span class="node-stat-item-label">Tiempo</span>
+                                <span class="node-stat-item-value">${stats.time?.toFixed(2) || 0}s</span>
+                            </div>
+                            `}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // ─── Log ────────────────────────────────────────────────────────
+        function addLog(type, msg) {
+            const container = document.getElementById('log-container');
+            const time = new Date().toLocaleTimeString();
+            const div = document.createElement('div');
+            div.className = `log-entry ${type}`;
+            div.textContent = `[${time}] ${msg}`;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // ─── Utilities ──────────────────────────────────────────────────
+        function formatNumber(n) {
+            if (n === undefined || n === null) return '0';
+            return n.toLocaleString('es-MX');
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        // ─── Tab Switching ──────────────────────────────────────────────
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            event.target.classList.add('active');
+            document.getElementById(`tab-${tab}`).classList.add('active');
+        }
+
+        // ─── Start Analyze ──────────────────────────────────────────────
+        async function startAnalyze() {
+            const filepath = document.getElementById('filepath-analyze').value.trim();
+            const distMode = document.querySelector('input[name="dist-mode"]:checked').value;
+            const targetNode = document.getElementById('target-node').value;
+            const chunkSize = parseInt(document.getElementById('chunk-size-analyze').value) || 50000;
+
+            document.getElementById('results-section').style.display = 'block';
+            document.getElementById('similarity-gauge').style.display = 'none';
+            document.getElementById('progress-bar').style.width = '0%';
+            document.getElementById('node-stats-grid').innerHTML = '';
+            document.getElementById('log-container').innerHTML = '';
+            document.getElementById('results-status').innerHTML = '<div class="spinner"></div><span>Iniciando validación...</span>';
+
+            // Remove any previous error table
+            const oldTable = document.querySelector('.error-table-wrapper');
+            if (oldTable) oldTable.parentElement.remove();
+
+            addLog('info', `📖 Lectura de archivo con CPU`);
+            addLog('info', `🔍 Validación distribuida con GPU`);
+            addLog('info', `Archivo: ${filepath}`);
+
+            document.getElementById('btn-start-analyze').disabled = true;
+
+            try {
+                const res = await fetch('/api/analyze', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        filepath: filepath,
+                        distribution_mode: distMode,
+                        target_node: targetNode,
+                        chunk_size: chunkSize,
+                    }),
+                });
+
+                const data = await res.json();
+
+                if (!res.ok) {
+                    addLog('error', `Error: ${data.error}`);
+                    document.getElementById('results-status').innerHTML = `<span style="color:var(--danger)">❌ Error</span>`;
+                    document.getElementById('btn-start-analyze').disabled = false;
+                    return;
+                }
+
+                currentJob = data.job_id;
+                addLog('success', `Job validación creado: ${data.job_id.substring(0, 8)}...`);
+                addLog('info', `Workers asignados: ${data.workers.length}`);
+
+                startJobStream(data.job_id);
+
+            } catch (err) {
+                addLog('error', `Error de conexión: ${err.message}`);
+                document.getElementById('results-status').innerHTML = `<span style="color:var(--danger)">❌ Error</span>`;
+                document.getElementById('btn-start-analyze').disabled = false;
+            }
+        }
+
+        // ─── CPU Config ─────────────────────────────────────────────────
+        async function saveCpuConfig(nodeId) {
+            const coresInput = document.getElementById(`cores-${nodeId}`);
+            if (!coresInput) return;
+
+            try {
+                const res = await fetch(`/api/workers/${nodeId}/cpu-config`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        cpu_cores: parseInt(coresInput.value),
+                    }),
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    coresInput.style.borderColor = 'var(--success)';
+                    setTimeout(() => { coresInput.style.borderColor = ''; }, 1500);
+                } else {
+                    alert(`Error: ${data.error}`);
+                }
+            } catch (err) {
+                alert(`Error de conexión: ${err.message}`);
+            }
+        }
+    </script>
+</body>
+</html>
