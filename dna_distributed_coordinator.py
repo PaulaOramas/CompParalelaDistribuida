@@ -1,5 +1,5 @@
 """
-DNA Distributed Coordinator v2.0
+DNA Distributed Coordinator v2.0 — Cloud Edition
 =================================
 Coordinador principal que distribuye la carga de comparación de ADN
 entre nodos workers conectados. Incluye interfaz web Flask.
@@ -12,10 +12,21 @@ Características:
   - Gestión de nodos: activar/desactivar, eliminar nodos
   - Configuración GPU: elegir compute units y work group size
   - Interfaz web con monitoreo en tiempo real (SSE)
+  - ☁️  MODO CLOUD: soporte para IP pública, sin UDP broadcast, clave secreta
 
-Uso:
+Uso local:
     python dna_distributed_coordinator.py
-    python dna_distributed_coordinator.py --port 5555 --web-port 5000
+
+Uso en Google Cloud (VM con IP pública):
+    python dna_distributed_coordinator.py \\
+        --public-ip 34.68.177.178 \\
+        --no-udp-broadcast \\
+        --secret MI_CLAVE_SECRETA
+
+Workers se conectan con:
+    python dna_distributed_node.py \\
+        --coordinator 34.68.177.178:5555 \\
+        --secret MI_CLAVE_SECRETA
 """
 
 import argparse
@@ -133,12 +144,12 @@ except Exception as e:
 # ─── Constants ──────────────────────────────────────────────────────────────
 
 VALID = frozenset("ATCGNatcgn")
-HEARTBEAT_TIMEOUT = 30.0    # seconds before considering a node dead
-CHUNK_SIZE = 50_000          # lines per chunk default
-BROADCAST_INTERVAL = 2.0     # seconds between coordinator heartbeats
-WINDOW_SIZE = 3              # max chunks in-flight per worker (flow control)
+HEARTBEAT_TIMEOUT = 30.0
+CHUNK_SIZE = 50_000
+BROADCAST_INTERVAL = 2.0
+WINDOW_SIZE = 3
 ACTIVE_COORD_FILE = Path(__file__).parent / ".active_coordinator"
-UDP_DISCOVERY_PORT = 5599    # UDP port for LAN coordinator discovery
+UDP_DISCOVERY_PORT = 5599
 
 # ─── Flask App ──────────────────────────────────────────────────────────────
 
@@ -147,7 +158,6 @@ app = Flask(__name__)
 # ─── Worker Registry ───────────────────────────────────────────────────────
 
 class WorkerInfo:
-    """Info about a connected worker node."""
     def __init__(self, node_id: str, node_name: str, hostname: str,
                  pid: int, cpu_count: int, gpu_info: dict = None):
         self.node_id = node_id
@@ -155,11 +165,11 @@ class WorkerInfo:
         self.hostname = hostname
         self.pid = pid
         self.cpu_count = cpu_count
-        self.local_ip = ""          # Worker's LAN IP (sent in REGISTER)
+        self.local_ip = ""
         self.last_heartbeat = time.time()
         self.registered_at = time.time()
         self.connected = True
-        self.enabled = True          # Can be toggled on/off from UI
+        self.enabled = True
         self.processing = False
         self.current_chunk = None
         self.chunks_processed = 0
@@ -167,7 +177,6 @@ class WorkerInfo:
         self.total_matches = 0
         self.total_compared = 0
 
-        # GPU info from worker
         self.gpu_info = gpu_info or {}
         self.gpu_available = self.gpu_info.get("available", False)
         self.gpu_name = self.gpu_info.get("name", "No disponible")
@@ -175,12 +184,9 @@ class WorkerInfo:
         self.gpu_max_work_group = self.gpu_info.get("max_work_group_size", 0)
         self.gpu_global_mem = self.gpu_info.get("global_memory", 0)
 
-        # Configurable GPU settings (can be set per-node from UI)
         self.gpu_work_group_size = min(64, self.gpu_max_work_group) if self.gpu_max_work_group > 0 else 64
-        self.gpu_compute_units_to_use = self.gpu_compute_units  # use all by default
-
-        # CPU config (can be set per-node from UI)
-        self.cpu_cores_to_use = self.cpu_count  # use all by default
+        self.gpu_compute_units_to_use = self.gpu_compute_units
+        self.cpu_cores_to_use = self.cpu_count
 
     def to_dict(self):
         return {
@@ -214,48 +220,57 @@ class WorkerInfo:
 # ─── Distributed Coordinator ──────────────────────────────────────────────
 
 class DistributedCoordinator:
-    def __init__(self, zmq_port: int = 5555, web_port: int = 5000):
+    def __init__(self, zmq_port: int = 5555, web_port: int = 5000,
+                 # ☁️  CLOUD: nuevos parámetros
+                 public_ip: str = None,
+                 no_udp_broadcast: bool = False,
+                 secret: str = ""):
         self.zmq_port = zmq_port
         self.web_port = web_port
         self.coordinator_id = str(uuid.uuid4())[:8]
         self.hostname = socket.gethostname()
-        self.local_ip = self._get_local_ip()
 
-        # Worker registry
+        # ☁️  CLOUD: usar IP pública si se provee, si no detectar automáticamente
+        self.local_ip = public_ip if public_ip else self._get_local_ip()
+        self.no_udp_broadcast = no_udp_broadcast
+        self.secret = secret  # ☁️  CLOUD: clave compartida para autenticación
+
         self.workers: dict[str, WorkerInfo] = {}
         self.workers_lock = threading.RLock()
 
-        # Job management
         self.jobs: dict = {}
         self.jobs_lock = threading.RLock()
 
-        # ZMQ context
         self.context = zmq.Context()
         self.running = False
 
-        # Pending chunks for reassignment
         self.pending_chunks: dict[str, dict] = {}
         self.completed_chunks: dict[str, dict] = {}
-        self.chunk_assignments: dict[str, str] = {}  # chunk_id -> node_id
+        self.chunk_assignments: dict[str, str] = {}
 
-        # Flow control: queue of chunks not yet sent
-        self.chunks_queue: dict[str, list] = {}      # job_id -> [(chunk_id, chunk_data)]
-        self.in_flight: dict[str, int] = {}           # node_id -> count of chunks in flight
+        self.chunks_queue: dict[str, list] = {}
+        self.in_flight: dict[str, int] = {}
         self._queue_lock = threading.Lock()
-        self._router_lock = threading.Lock()          # Protect ROUTER socket (multi-thread sends)
+        self._router_lock = threading.Lock()
 
-        # State for failover propagation
         self.state_version = 0
 
+        # ☁️  CLOUD: mostrar modo de operación
+        cloud_mode = "☁️  CLOUD" if (public_ip or no_udp_broadcast) else "🏠 LAN"
         print(f"\n{'='*60}")
         print(f"  🧬 DNA Distributed Coordinator v2.0")
+        print(f"  Modo:      {cloud_mode}")
         print(f"  ID:        {self.coordinator_id}")
         print(f"  Host:      {self.hostname}")
-        print(f"  IP Local:  {self.local_ip}")
+        print(f"  IP:        {self.local_ip}")
+        if public_ip:
+            print(f"  IP Pub:    {public_ip}  ← workers usan esta IP")
         print(f"  ZMQ Port:  {zmq_port}")
         print(f"  Web Port:  {web_port}")
         print(f"  CPUs:      {mp.cpu_count()}")
         print(f"  GPU:       {'✅ ' + GPU_NAME if GPU_AVAILABLE else '❌ ' + GPU_NAME}")
+        print(f"  UDP Bcast: {'❌ Desactivado (cloud)' if no_udp_broadcast else '✅ Activo (LAN)'}")
+        print(f"  Seguridad: {'🔐 Clave activa' if secret else '⚠️  Sin clave (inseguro)'}")
         if GPU_AVAILABLE:
             print(f"  GPU CUs:   {GPU_COMPUTE_UNITS}")
             print(f"  GPU Mem:   {GPU_GLOBAL_MEM / (1024**2):.0f} MB")
@@ -263,7 +278,6 @@ class DistributedCoordinator:
         print(f"{'='*60}\n")
 
     def _get_local_ip(self):
-        """Get the local IP address."""
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
@@ -274,15 +288,12 @@ class DistributedCoordinator:
             return "127.0.0.1"
 
     def start(self):
-        """Start the coordinator."""
         self.running = True
 
-        # ROUTER socket for worker communication
         self.router = self.context.socket(zmq.ROUTER)
         self.router.setsockopt(zmq.LINGER, 0)
         self.router.bind(f"tcp://*:{self.zmq_port}")
 
-        # PUB socket for broadcasting
         self.pub = self.context.socket(zmq.PUB)
         self.pub.setsockopt(zmq.LINGER, 0)
         self.pub.bind(f"tcp://*:{self.zmq_port + 1}")
@@ -290,7 +301,6 @@ class DistributedCoordinator:
         print(f"  ✅ ZMQ ROUTER en puerto {self.zmq_port}")
         print(f"  ✅ ZMQ PUB en puerto {self.zmq_port + 1}")
 
-        # Write active coordinator address to file
         try:
             ACTIVE_COORD_FILE.write_text(json.dumps({
                 "addr": f"{self.local_ip}:{self.zmq_port}",
@@ -301,49 +311,39 @@ class DistributedCoordinator:
         except Exception:
             pass
 
-        # Start background threads
-        self.msg_thread = threading.Thread(
-            target=self._message_loop, daemon=True
-        )
+        self.msg_thread = threading.Thread(target=self._message_loop, daemon=True)
         self.msg_thread.start()
 
-        self.health_thread = threading.Thread(
-            target=self._health_check_loop, daemon=True
-        )
+        self.health_thread = threading.Thread(target=self._health_check_loop, daemon=True)
         self.health_thread.start()
 
-        self.broadcast_thread = threading.Thread(
-            target=self._broadcast_loop, daemon=True
-        )
+        self.broadcast_thread = threading.Thread(target=self._broadcast_loop, daemon=True)
         self.broadcast_thread.start()
 
-        # Self-demotion thread: detect if another coordinator exists
-        self._demotion_thread = threading.Thread(
-            target=self._self_demotion_loop, daemon=True
-        )
-        self._demotion_thread.start()
+        # ☁️  CLOUD: solo activar demotion loop en modo LAN
+        if not self.no_udp_broadcast:
+            self._demotion_thread = threading.Thread(
+                target=self._self_demotion_loop, daemon=True
+            )
+            self._demotion_thread.start()
 
         print(f"  ✅ Hilos de control iniciados")
         print(f"\n  🌐 Interfaz web: http://{self.local_ip}:{self.web_port}")
         print(f"  📡 Workers deben conectar a: {self.local_ip}:{self.zmq_port}")
+        if self.secret:
+            print(f"  🔐 Workers necesitan --secret {self.secret}")
         print(f"\n  Esperando workers...\n")
 
     def _self_demotion_loop(self):
-        """Periodically check if this coordinator should demote itself.
-        If we have zero workers for a while and detect another coordinator
-        on the network, we should step down and become a worker."""
-        time.sleep(15)  # Grace period at startup
+        """Solo activo en modo LAN. En cloud no se usa UDP broadcast."""
+        time.sleep(15)
         while self.running:
             time.sleep(10)
-            # Only check if we have no workers
             with self.workers_lock:
-                connected_count = sum(
-                    1 for w in self.workers.values() if w.connected
-                )
+                connected_count = sum(1 for w in self.workers.values() if w.connected)
             if connected_count > 0:
                 continue
 
-            # Listen for UDP broadcasts from another coordinator
             try:
                 udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -360,10 +360,9 @@ class DistributedCoordinator:
                     print(f"\n  ⚠ Otro coordinador detectado en {other_addr}")
                     print(f"  🔄 Este coordinador no tiene workers → demotándose a worker...")
                     self.stop()
-
-                    # Relaunch as worker
                     from dna_distributed_node import WorkerNode
-                    node = WorkerNode(other_addr, f"ex-coord-{self.hostname}")
+                    node = WorkerNode(other_addr, f"ex-coord-{self.hostname}",
+                                      secret=self.secret)
                     node.start()
                     return
             except socket.timeout:
@@ -374,7 +373,6 @@ class DistributedCoordinator:
                 pass
 
     def _message_loop(self):
-        """Main loop to receive messages from workers."""
         poller = zmq.Poller()
         poller.register(self.router, zmq.POLLIN)
 
@@ -397,56 +395,45 @@ class DistributedCoordinator:
                 time.sleep(0.1)
 
     def _handle_message(self, identity: str, msg: dict):
-        """Handle incoming message from a worker."""
         msg_type = msg.get("type", "")
         node_id = msg.get("node_id", identity)
         node_name = msg.get("node_name", node_id)
         data = msg.get("data", {})
 
-        # ANY message from a worker proves it's alive — refresh heartbeat
+        # ☁️  CLOUD: verificar clave secreta si está configurada
+        if self.secret and msg.get("secret", "") != self.secret:
+            print(f"  ⛔ Mensaje rechazado de {node_id}: clave incorrecta")
+            return
+
         with self.workers_lock:
             if node_id in self.workers:
                 self.workers[node_id].last_heartbeat = time.time()
-                # Auto-reconnect if it was marked dead but is sending messages
                 if not self.workers[node_id].connected:
                     self.workers[node_id].connected = True
                     print(f"\n  🔄 Worker {self.workers[node_id].node_name} reconectado automáticamente")
 
         if msg_type == "REGISTER":
             self._register_worker(node_id, node_name, data)
-
         elif msg_type == "HEARTBEAT":
             self._update_heartbeat(node_id, node_name, data)
-
         elif msg_type == "RESULT":
-            # Process results in a separate thread to avoid blocking heartbeat reception
             threading.Thread(
-                target=self._handle_result, args=(node_id, data),
-                daemon=True
+                target=self._handle_result, args=(node_id, data), daemon=True
             ).start()
-
         elif msg_type == "VALIDATE_RESULT":
             threading.Thread(
-                target=self._handle_validate_result, args=(node_id, data),
-                daemon=True
+                target=self._handle_validate_result, args=(node_id, data), daemon=True
             ).start()
-
         elif msg_type == "UNREGISTER":
             self._unregister_worker(node_id)
-
         elif msg_type == "PONG":
             with self.workers_lock:
                 if node_id in self.workers:
                     self.workers[node_id].last_heartbeat = time.time()
-
         elif msg_type == "ELECTION_RESPONSE":
-            pass  # Handled by workers during election
-
-        elif msg_type == "VALIDATE_RESULT":
-            self._handle_validate_result(node_id, data)
+            pass
 
     def _register_worker(self, node_id: str, node_name: str, data: dict):
-        """Register a new worker."""
         gpu_info = data.get("gpu_info", {})
         with self.workers_lock:
             self.workers[node_id] = WorkerInfo(
@@ -457,7 +444,6 @@ class DistributedCoordinator:
                 cpu_count=data.get("cpu_count", 1),
                 gpu_info=gpu_info,
             )
-            # Save worker's IP if provided
             if data.get("local_ip"):
                 self.workers[node_id].local_ip = data["local_ip"]
         gpu_status = f"GPU: {gpu_info.get('name', 'N/A')}" if gpu_info.get("available") else "Sin GPU"
@@ -465,12 +451,9 @@ class DistributedCoordinator:
               f"desde {data.get('hostname', '?')} — {gpu_status}", flush=True)
 
         self._broadcast_peer_list()
-
-        # If there's an active job with queued chunks, send work to the new worker
         self._assign_queued_work_to_worker(node_id)
 
     def _update_heartbeat(self, node_id: str, node_name: str, data: dict):
-        """Update heartbeat for a worker."""
         with self.workers_lock:
             if node_id in self.workers:
                 w = self.workers[node_id]
@@ -482,7 +465,6 @@ class DistributedCoordinator:
                 w.total_lines = data.get("total_lines", 0)
                 w.total_matches = data.get("total_matches", 0)
                 w.total_compared = data.get("total_compared", 0)
-                # Update GPU info if provided
                 if "gpu_info" in data:
                     gi = data["gpu_info"]
                     w.gpu_available = gi.get("available", w.gpu_available)
@@ -494,7 +476,6 @@ class DistributedCoordinator:
                 self._register_worker(node_id, node_name, data)
 
     def _handle_result(self, node_id: str, data: dict):
-        """Handle a result from a worker."""
         chunk_id = data.get("chunk_id", "")
         job_id = data.get("job_id", "")
 
@@ -503,21 +484,16 @@ class DistributedCoordinator:
                 return
             job = self.jobs[job_id]
 
-        # Remove from assignments
         if chunk_id in self.chunk_assignments:
             del self.chunk_assignments[chunk_id]
 
-        # Store completed chunk result
         if job_id not in self.completed_chunks:
             self.completed_chunks[job_id] = {}
         self.completed_chunks[job_id][chunk_id] = data
 
-        # Remove from pending
         if job_id in self.pending_chunks and chunk_id in self.pending_chunks[job_id]:
             del self.pending_chunks[job_id][chunk_id]
 
-        # Aggregate results
-        chunk_index = data.get("chunk_index", 0)
         matches = data.get("matches", 0)
         compared = data.get("compared", 0)
         elapsed = data.get("elapsed", 0)
@@ -530,7 +506,6 @@ class DistributedCoordinator:
             job["chunks_completed"] += 1
             job["lines_processed"] += lines_processed
 
-            # Per-node tracking
             if node_id not in job["node_stats"]:
                 job["node_stats"][node_id] = {
                     "chunks": 0, "lines": 0, "matches": 0,
@@ -548,14 +523,10 @@ class DistributedCoordinator:
                 existing["total_d2h_ms"] = existing.get("total_d2h_ms", 0) + gpu_metrics.get("transfer_d2h_ms", 0)
                 job["node_stats"][node_id]["gpu_metrics"] = existing
 
-            # Progress
             total_chunks = job.get("total_chunks", 1)
-            sim_pct = round(
-                job["total_matches"] / max(job["total_compared"], 1) * 100, 4
-            )
+            sim_pct = round(job["total_matches"] / max(job["total_compared"], 1) * 100, 4)
             job_elapsed = time.time() - job["start_time"]
 
-            # Get node names for stats
             node_stats_named = {}
             with self.workers_lock:
                 for nid, stats in job["node_stats"].items():
@@ -581,7 +552,6 @@ class DistributedCoordinator:
             }
             job["events"].append(event)
 
-            # Check if job is complete
             if job["chunks_completed"] >= total_chunks:
                 job["status"] = "done"
                 job["elapsed"] = round(job_elapsed, 2)
@@ -612,27 +582,22 @@ class DistributedCoordinator:
                 print(f"\n  ✅ Job {job_id[:8]} completado: "
                       f"{sim_pct:.2f}% coincidencia en {job_elapsed:.1f}s")
 
-        # Flow control: decrement in-flight and send next chunk
         with self._queue_lock:
             self.in_flight[node_id] = max(0, self.in_flight.get(node_id, 1) - 1)
         self._send_next_chunk(job_id, node_id)
 
     def _unregister_worker(self, node_id: str):
-        """Unregister a worker."""
         with self.workers_lock:
             if node_id in self.workers:
                 name = self.workers[node_id].node_name
                 self.workers[node_id].connected = False
                 print(f"  ⚠ Worker desconectado: {name} ({node_id})")
-
         self._reassign_chunks(node_id)
 
     def remove_worker(self, node_id: str) -> bool:
-        """Remove a worker completely from registry."""
         with self.workers_lock:
             if node_id in self.workers:
                 name = self.workers[node_id].node_name
-                # Send kill signal to worker
                 try:
                     self.router.send_multipart([
                         node_id.encode(),
@@ -647,15 +612,12 @@ class DistributedCoordinator:
         return False
 
     def toggle_worker(self, node_id: str, enabled: bool) -> bool:
-        """Enable or disable a worker."""
         with self.workers_lock:
             if node_id in self.workers:
                 self.workers[node_id].enabled = enabled
                 name = self.workers[node_id].node_name
                 state = "activado" if enabled else "desactivado"
                 print(f"  {'✅' if enabled else '⏸️'} Worker {state}: {name} ({node_id})")
-
-                # Notify worker of its status
                 try:
                     msg = {"type": "STATUS_CHANGE", "data": {"enabled": enabled}}
                     self.router.send_multipart([
@@ -667,9 +629,7 @@ class DistributedCoordinator:
                 return True
         return False
 
-    def configure_worker_gpu(self, node_id: str, work_group_size: int,
-                              compute_units: int) -> bool:
-        """Configure GPU settings for a worker."""
+    def configure_worker_gpu(self, node_id: str, work_group_size: int, compute_units: int) -> bool:
         with self.workers_lock:
             if node_id in self.workers:
                 w = self.workers[node_id]
@@ -677,8 +637,6 @@ class DistributedCoordinator:
                     w.gpu_work_group_size = min(work_group_size, w.gpu_max_work_group)
                 if compute_units > 0:
                     w.gpu_compute_units_to_use = min(compute_units, w.gpu_compute_units)
-
-                # Notify worker of GPU config
                 try:
                     msg = {
                         "type": "GPU_CONFIG",
@@ -687,50 +645,30 @@ class DistributedCoordinator:
                             "compute_units": w.gpu_compute_units_to_use,
                         },
                     }
-                    self.router.send_multipart([
-                        node_id.encode(),
-                        json.dumps(msg).encode(),
-                    ])
+                    self.router.send_multipart([node_id.encode(), json.dumps(msg).encode()])
                 except zmq.ZMQError:
                     pass
-
-                name = w.node_name
-                print(f"  ⚙️ GPU config actualizada para {name}: "
+                print(f"  ⚙️ GPU config actualizada para {w.node_name}: "
                       f"WG={w.gpu_work_group_size}, CUs={w.gpu_compute_units_to_use}")
                 return True
         return False
 
     def configure_worker_cpu(self, node_id: str, cpu_cores: int) -> bool:
-        """Configure CPU cores for a worker."""
         with self.workers_lock:
             if node_id in self.workers:
                 w = self.workers[node_id]
-                if 0 < cpu_cores <= w.cpu_count:
-                    w.cpu_cores_to_use = cpu_cores
-                else:
-                    w.cpu_cores_to_use = w.cpu_count
-
-                # Notify worker of CPU config
+                w.cpu_cores_to_use = cpu_cores if 0 < cpu_cores <= w.cpu_count else w.cpu_count
                 try:
-                    msg = {
-                        "type": "CPU_CONFIG",
-                        "data": {"cpu_cores": w.cpu_cores_to_use},
-                    }
-                    self.router.send_multipart([
-                        node_id.encode(),
-                        json.dumps(msg).encode(),
-                    ])
+                    msg = {"type": "CPU_CONFIG", "data": {"cpu_cores": w.cpu_cores_to_use}}
+                    self.router.send_multipart([node_id.encode(), json.dumps(msg).encode()])
                 except zmq.ZMQError:
                     pass
-
-                name = w.node_name
-                print(f"  ⚙️ CPU config actualizada para {name}: "
+                print(f"  ⚙️ CPU config actualizada para {w.node_name}: "
                       f"Cores={w.cpu_cores_to_use}/{w.cpu_count}")
                 return True
         return False
 
     def _health_check_loop(self):
-        """Periodically check worker health and reassign chunks if needed."""
         while self.running:
             time.sleep(3)
             now = time.time()
@@ -739,12 +677,8 @@ class DistributedCoordinator:
             with self.workers_lock:
                 for node_id, worker in self.workers.items():
                     if worker.connected and (now - worker.last_heartbeat) > HEARTBEAT_TIMEOUT:
-                        # Send a PING before declaring dead
                         try:
-                            ping_msg = {
-                                "type": "PING",
-                                "data": {"ping_id": str(uuid.uuid4())[:8]},
-                            }
+                            ping_msg = {"type": "PING", "data": {"ping_id": str(uuid.uuid4())[:8]}}
                             with self._router_lock:
                                 self.router.send_multipart([
                                     node_id.encode(),
@@ -752,7 +686,6 @@ class DistributedCoordinator:
                                 ])
                         except zmq.ZMQError:
                             pass
-                        # Give extra grace period after ping
                         if (now - worker.last_heartbeat) > HEARTBEAT_TIMEOUT + 5:
                             worker.connected = False
                             dead_workers.append(node_id)
@@ -763,7 +696,6 @@ class DistributedCoordinator:
                 self._reassign_chunks(node_id)
 
     def _reassign_chunks(self, dead_node_id: str):
-        """Reassign chunks from a dead node: put them back in the queue."""
         chunks_to_reassign = []
         for chunk_id, assigned_node in list(self.chunk_assignments.items()):
             if assigned_node == dead_node_id:
@@ -774,7 +706,6 @@ class DistributedCoordinator:
 
         print(f"  🔄 Reponiendo {len(chunks_to_reassign)} chunks del nodo caído en la cola")
 
-        # Put chunks back in their job's queue
         for chunk_id in chunks_to_reassign:
             del self.chunk_assignments[chunk_id]
             for job_id, pending in self.pending_chunks.items():
@@ -783,15 +714,12 @@ class DistributedCoordinator:
                     with self._queue_lock:
                         if job_id not in self.chunks_queue:
                             self.chunks_queue[job_id] = []
-                        # Put at front of queue (priority)
                         self.chunks_queue[job_id].insert(0, (chunk_id, chunk_data))
                     break
 
-        # Decrement in-flight for dead node
         with self._queue_lock:
             self.in_flight[dead_node_id] = 0
 
-        # Try to send queued chunks to other available workers
         with self.workers_lock:
             alive_workers = [
                 nid for nid, w in self.workers.items()
@@ -807,9 +735,7 @@ class DistributedCoordinator:
                     if not self._send_next_chunk(job_id, wid):
                         break
 
-        remaining = sum(
-            len(q) for q in self.chunks_queue.values()
-        )
+        remaining = sum(len(q) for q in self.chunks_queue.values())
         if remaining > 0 and not alive_workers:
             print(f"  ⚠ {remaining} chunks en cola esperando un worker")
         elif remaining > 0:
@@ -818,11 +744,8 @@ class DistributedCoordinator:
             print(f"  ✅ Todos los chunks reasignados exitosamente")
 
     def _assign_queued_work_to_worker(self, node_id: str):
-        """Send queued chunks to a newly connected worker (dynamic join)."""
         with self._queue_lock:
-            active_jobs = [
-                jid for jid, q in self.chunks_queue.items() if q
-            ]
+            active_jobs = [jid for jid, q in self.chunks_queue.items() if q]
 
         if not active_jobs:
             return
@@ -836,26 +759,20 @@ class DistributedCoordinator:
         for job_id in active_jobs:
             with self._queue_lock:
                 self.in_flight[node_id] = 0
-
             sent = 0
             for _ in range(WINDOW_SIZE):
                 if self._send_next_chunk(job_id, node_id):
                     sent += 1
                 else:
                     break
-
             if sent > 0:
-                print(f"  🆕 Worker {name} se unió al job {job_id[:8]} — "
-                      f"recibió {sent} chunks")
+                print(f"  🆕 Worker {name} se unió al job {job_id[:8]} — recibió {sent} chunks")
 
     def _broadcast_loop(self):
-        """Send periodic broadcasts to workers."""
         while self.running:
             try:
-                # Coordinator heartbeat with state for failover
                 self.state_version += 1
                 state_data = self._get_coordinator_state()
-
                 self.pub.send_json({
                     "type": "COORDINATOR_HEARTBEAT",
                     "coordinator_id": self.coordinator_id,
@@ -868,25 +785,25 @@ class DistributedCoordinator:
             except zmq.ZMQError:
                 pass
 
-            # UDP LAN broadcast for discovery by other coordinators
-            try:
-                udp_msg = json.dumps({
-                    "type": "COORDINATOR_ANNOUNCE",
-                    "addr": f"{self.local_ip}:{self.zmq_port}",
-                    "web": f"http://{self.local_ip}:{self.web_port}",
-                    "coordinator_id": self.coordinator_id,
-                }).encode()
-                udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-                udp_sock.sendto(udp_msg, ("<broadcast>", UDP_DISCOVERY_PORT))
-                udp_sock.close()
-            except Exception:
-                pass
+            # ☁️  CLOUD: solo hacer UDP broadcast en modo LAN
+            if not self.no_udp_broadcast:
+                try:
+                    udp_msg = json.dumps({
+                        "type": "COORDINATOR_ANNOUNCE",
+                        "addr": f"{self.local_ip}:{self.zmq_port}",
+                        "web": f"http://{self.local_ip}:{self.web_port}",
+                        "coordinator_id": self.coordinator_id,
+                    }).encode()
+                    udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                    udp_sock.sendto(udp_msg, ("<broadcast>", UDP_DISCOVERY_PORT))
+                    udp_sock.close()
+                except Exception:
+                    pass
 
             time.sleep(BROADCAST_INTERVAL)
 
     def _get_coordinator_state(self) -> dict:
-        """Get coordinator state for failover propagation."""
         with self.workers_lock:
             workers_state = {}
             for nid, w in self.workers.items():
@@ -904,9 +821,7 @@ class DistributedCoordinator:
             jobs_summary = {}
             for jid, j in self.jobs.items():
                 if j["status"] in ("processing", "distributing"):
-                    completed_chunk_ids = list(
-                        self.completed_chunks.get(jid, {}).keys()
-                    )
+                    completed_chunk_ids = list(self.completed_chunks.get(jid, {}).keys())
                     jobs_summary[jid] = {
                         "status": j["status"],
                         "type": j.get("type", "compare"),
@@ -933,7 +848,6 @@ class DistributedCoordinator:
         }
 
     def _broadcast_peer_list(self):
-        """Broadcast the current peer list to all workers."""
         with self.workers_lock:
             peers = {
                 nid: {
@@ -946,16 +860,11 @@ class DistributedCoordinator:
                 for nid, w in self.workers.items()
             }
         try:
-            self.pub.send_json({
-                "type": "PEER_LIST",
-                "data": {"peers": peers},
-            })
+            self.pub.send_json({"type": "PEER_LIST", "data": {"peers": peers}})
         except zmq.ZMQError:
             pass
 
-    def _get_available_worker(self, exclude: list = None,
-                              target_node: str = None) -> str | None:
-        """Get an available worker node ID (only enabled & connected)."""
+    def _get_available_worker(self, exclude: list = None, target_node: str = None) -> str | None:
         exclude = exclude or []
         with self.workers_lock:
             if target_node:
@@ -965,25 +874,20 @@ class DistributedCoordinator:
                         target_node not in exclude):
                     return target_node
                 for nid, w in self.workers.items():
-                    if (w.node_name == target_node and w.connected
-                            and w.enabled and nid not in exclude):
+                    if w.node_name == target_node and w.connected and w.enabled and nid not in exclude:
                         return nid
                 return None
 
-            # Get least-busy connected AND enabled worker
             candidates = [
                 (nid, w) for nid, w in self.workers.items()
                 if w.connected and w.enabled and nid not in exclude
             ]
             if not candidates:
                 return None
-
             candidates.sort(key=lambda x: (x[1].processing, x[1].chunks_processed))
             return candidates[0][0]
 
     def _send_chunk_to_worker(self, node_id: str, chunk_data: dict):
-        """Send a chunk to a specific worker via ROUTER socket."""
-        # Attach GPU config from worker settings
         with self.workers_lock:
             w = self.workers.get(node_id)
             if w:
@@ -991,7 +895,6 @@ class DistributedCoordinator:
                     "work_group_size": w.gpu_work_group_size,
                     "compute_units": w.gpu_compute_units_to_use,
                 }
-
         try:
             with self._router_lock:
                 self.router.send_multipart([
@@ -1002,12 +905,10 @@ class DistributedCoordinator:
             print(f"  ❌ Error enviando chunk a {node_id}: {e}")
 
     def get_active_workers(self) -> list:
-        """Get list of active workers as dicts."""
         with self.workers_lock:
             return [w.to_dict() for w in self.workers.values() if w.connected]
 
     def get_all_workers(self) -> list:
-        """Get list of all workers as dicts."""
         with self.workers_lock:
             return [w.to_dict() for w in self.workers.values()]
 
@@ -1018,15 +919,6 @@ class DistributedCoordinator:
                           target_node: str = None,
                           exclude_master: bool = False,
                           chunk_size: int = CHUNK_SIZE) -> dict:
-        """
-        Start a DNA comparison job.
-        File reading is done with CPU, processing distributed to workers (GPU).
-
-        distribution_mode:
-          - "all": distribute to all enabled workers
-          - "specific": send all to target_node
-          - "exclude_master": distribute to all except the first registered node
-        """
         path_a = Path(filepath_a).expanduser().resolve()
         path_b = Path(filepath_b).expanduser().resolve()
 
@@ -1036,21 +928,14 @@ class DistributedCoordinator:
             if not p.is_file():
                 raise ValueError(f"La ruta {name} no es un archivo: {p}")
 
-        # Get available workers (connected AND enabled)
         with self.workers_lock:
-            active = [
-                (nid, w) for nid, w in self.workers.items()
-                if w.connected and w.enabled
-            ]
+            active = [(nid, w) for nid, w in self.workers.items() if w.connected and w.enabled]
 
         if not active:
             raise RuntimeError("No hay workers conectados y habilitados")
 
         if distribution_mode == "specific" and target_node:
-            available_ids = []
-            for nid, w in active:
-                if nid == target_node or w.node_name == target_node:
-                    available_ids.append(nid)
+            available_ids = [nid for nid, w in active if nid == target_node or w.node_name == target_node]
             if not available_ids:
                 raise RuntimeError(f"Nodo '{target_node}' no encontrado o no habilitado")
         elif distribution_mode == "exclude_master":
@@ -1063,27 +948,15 @@ class DistributedCoordinator:
             available_ids = [nid for nid, _ in active]
 
         job_id = str(uuid.uuid4())
-
         job = {
-            "id": job_id,
-            "type": "compare",
-            "filepath_a": str(path_a),
-            "filepath_b": str(path_b),
-            "filename_a": path_a.name,
-            "filename_b": path_b.name,
-            "distribution_mode": distribution_mode,
-            "target_node": target_node,
-            "status": "reading",
-            "events": [],
-            "total_matches": 0,
-            "total_compared": 0,
-            "chunks_completed": 0,
-            "total_chunks": 0,
-            "lines_processed": 0,
-            "node_stats": {},
-            "start_time": time.time(),
-            "elapsed": 0,
-            "similarity": 0,
+            "id": job_id, "type": "compare",
+            "filepath_a": str(path_a), "filepath_b": str(path_b),
+            "filename_a": path_a.name, "filename_b": path_b.name,
+            "distribution_mode": distribution_mode, "target_node": target_node,
+            "status": "reading", "events": [],
+            "total_matches": 0, "total_compared": 0,
+            "chunks_completed": 0, "total_chunks": 0, "lines_processed": 0,
+            "node_stats": {}, "start_time": time.time(), "elapsed": 0, "similarity": 0,
         }
 
         with self.jobs_lock:
@@ -1091,7 +964,6 @@ class DistributedCoordinator:
 
         job["events"].append({"type": "status", "data": "reading"})
 
-        # Start processing in background
         t = threading.Thread(
             target=self._run_compare_job,
             args=(job_id, path_a, path_b, available_ids, chunk_size),
@@ -1109,15 +981,10 @@ class DistributedCoordinator:
 
     def _run_compare_job(self, job_id: str, path_a: Path, path_b: Path,
                          worker_ids: list, chunk_size: int):
-        """Background thread to run a comparison job.
-        FILE READING is done with CPU here on the coordinator.
-        COMPARISON is sent to workers for GPU processing.
-        """
         with self.jobs_lock:
             job = self.jobs[job_id]
 
         try:
-            # CPU reads DNA lines
             print(f"  📖 Leyendo archivos con CPU...")
             read_start = time.time()
             lines_a = self._read_dna_lines(path_a)
@@ -1136,24 +1003,17 @@ class DistributedCoordinator:
             job["events"].append({
                 "type": "info",
                 "data": {
-                    "lines_a": total_a,
-                    "lines_b": total_b,
-                    "lines_compared": min_lines,
-                    "workers": worker_ids,
-                    "read_time": round(read_elapsed, 2),
-                    "read_mode": "CPU",
+                    "lines_a": total_a, "lines_b": total_b,
+                    "lines_compared": min_lines, "workers": worker_ids,
+                    "read_time": round(read_elapsed, 2), "read_mode": "CPU",
                 },
             })
 
             if min_lines == 0:
                 job["status"] = "error"
-                job["events"].append({
-                    "type": "error",
-                    "data": "Uno de los archivos no tiene líneas de ADN.",
-                })
+                job["events"].append({"type": "error", "data": "Uno de los archivos no tiene líneas de ADN."})
                 return
 
-            # Create chunks
             chunks = []
             for i in range(0, min_lines, chunk_size):
                 end = min(i + chunk_size, min_lines)
@@ -1161,14 +1021,10 @@ class DistributedCoordinator:
                 chunk_data = {
                     "type": "CHUNK_COMPARE",
                     "data": {
-                        "chunk_id": chunk_id,
-                        "job_id": job_id,
+                        "chunk_id": chunk_id, "job_id": job_id,
                         "chunk_index": len(chunks),
-                        "lines_a": lines_a[i:end],
-                        "lines_b": lines_b[i:end],
-                        "start_line": i,
-                        "end_line": end,
-                        "total_chunks": 0,
+                        "lines_a": lines_a[i:end], "lines_b": lines_b[i:end],
+                        "start_line": i, "end_line": end, "total_chunks": 0,
                     },
                 }
                 chunks.append((chunk_id, chunk_data))
@@ -1179,28 +1035,20 @@ class DistributedCoordinator:
 
             job["total_chunks"] = total_chunks
             job["status"] = "distributing"
-            job["events"].append({
-                "type": "status",
-                "data": "distributing",
-            })
+            job["events"].append({"type": "status", "data": "distributing"})
 
-            # Store pending chunks
             self.pending_chunks[job_id] = {}
             for chunk_id, chunk_data in chunks:
                 self.pending_chunks[job_id][chunk_id] = chunk_data
 
-            # Distribute chunks with flow control (only WINDOW_SIZE per worker at a time)
             job["status"] = "processing"
             job["events"].append({"type": "status", "data": "processing"})
 
-            # Store ALL chunks in queue
             with self._queue_lock:
-                self.chunks_queue[job_id] = list(chunks)  # [(chunk_id, chunk_data), ...]
-                # Initialize in-flight counts
+                self.chunks_queue[job_id] = list(chunks)
                 for wid in worker_ids:
                     self.in_flight[wid] = 0
 
-            # Send initial batch (WINDOW_SIZE per worker)
             sent = 0
             for wid in worker_ids:
                 for _ in range(WINDOW_SIZE):
@@ -1220,18 +1068,13 @@ class DistributedCoordinator:
             traceback.print_exc()
 
     def _send_next_chunk(self, job_id: str, node_id: str) -> bool:
-        """Send the next pending chunk from the queue to a specific worker.
-        Returns True if a chunk was sent, False if queue is empty."""
         with self._queue_lock:
             if job_id not in self.chunks_queue or not self.chunks_queue[job_id]:
                 return False
-
-            # Check worker is alive
             with self.workers_lock:
                 w = self.workers.get(node_id)
                 if not w or not w.connected or not w.enabled:
                     return False
-
             chunk_id, chunk_data = self.chunks_queue[job_id].pop(0)
             self.in_flight[node_id] = self.in_flight.get(node_id, 0) + 1
 
@@ -1254,7 +1097,6 @@ class DistributedCoordinator:
         return True
 
     def _read_dna_lines(self, filepath: Path) -> list:
-        """Read DNA lines from file using CPU, skipping headers and empty lines."""
         lines = []
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             for raw_line in f:
@@ -1267,7 +1109,6 @@ class DistributedCoordinator:
         return lines
 
     def _read_dna_lines_with_rows(self, filepath: Path) -> list:
-        """Read DNA lines with row numbers from file using CPU."""
         lines = []
         row = 0
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
@@ -1282,7 +1123,6 @@ class DistributedCoordinator:
         return lines
 
     def _handle_validate_result(self, node_id: str, data: dict):
-        """Handle a validation result from a worker."""
         chunk_id = data.get("chunk_id", "")
         job_id = data.get("job_id", "")
 
@@ -1291,20 +1131,16 @@ class DistributedCoordinator:
                 return
             job = self.jobs[job_id]
 
-        # Remove from assignments
         if chunk_id in self.chunk_assignments:
             del self.chunk_assignments[chunk_id]
 
-        # Store completed chunk result
         if job_id not in self.completed_chunks:
             self.completed_chunks[job_id] = {}
         self.completed_chunks[job_id][chunk_id] = data
 
-        # Remove from pending
         if job_id in self.pending_chunks and chunk_id in self.pending_chunks[job_id]:
             del self.pending_chunks[job_id][chunk_id]
 
-        chunk_index = data.get("chunk_index", 0)
         total_errors = data.get("total_errors", 0)
         error_details = data.get("error_details", [])
         elapsed = data.get("elapsed", 0)
@@ -1316,19 +1152,14 @@ class DistributedCoordinator:
             job["chunks_completed"] += 1
             job["lines_processed"] += lines_processed
 
-            # Accumulate error details (limit to 500)
             existing_details = job.get("all_error_details", [])
             remaining = 500 - len(existing_details)
             if remaining > 0:
                 existing_details.extend(error_details[:remaining])
             job["all_error_details"] = existing_details
 
-            # Per-node tracking
             if node_id not in job["node_stats"]:
-                job["node_stats"][node_id] = {
-                    "chunks": 0, "lines": 0, "errors": 0,
-                    "time": 0, "gpu_metrics": {},
-                }
+                job["node_stats"][node_id] = {"chunks": 0, "lines": 0, "errors": 0, "time": 0, "gpu_metrics": {}}
             job["node_stats"][node_id]["chunks"] += 1
             job["node_stats"][node_id]["lines"] += lines_processed
             job["node_stats"][node_id]["errors"] += total_errors
@@ -1341,7 +1172,6 @@ class DistributedCoordinator:
             total_chunks = job.get("total_chunks", 1)
             job_elapsed = time.time() - job["start_time"]
 
-            # Get node names
             node_stats_named = {}
             with self.workers_lock:
                 for nid, stats in job["node_stats"].items():
@@ -1349,7 +1179,7 @@ class DistributedCoordinator:
                     name = w.node_name if w else nid
                     node_stats_named[name] = stats
 
-            event = {
+            job["events"].append({
                 "type": "progress",
                 "data": {
                     "chunks_completed": job["chunks_completed"],
@@ -1360,22 +1190,19 @@ class DistributedCoordinator:
                     "elapsed": round(job_elapsed, 2),
                     "node_stats": node_stats_named,
                 },
-            }
-            job["events"].append(event)
+            })
 
-            # Check if job complete
             if job["chunks_completed"] >= total_chunks:
                 job["status"] = "done"
                 job["elapsed"] = round(job_elapsed, 2)
 
-                # Collect all error details sorted by row
                 all_details = []
                 for cid in sorted(self.completed_chunks.get(job_id, {}).keys()):
                     cdata = self.completed_chunks[job_id][cid]
                     all_details.extend(cdata.get("error_details", []))
                 all_details.sort(key=lambda x: (x.get("row", 0), x.get("col", 0)))
 
-                done_event = {
+                job["events"].append({
                     "type": "done",
                     "data": {
                         "job_type": "analyze",
@@ -1386,48 +1213,30 @@ class DistributedCoordinator:
                         "node_stats": node_stats_named,
                         "error_details": all_details[:500],
                     },
-                }
-                job["events"].append(done_event)
+                })
                 print(f"\n  ✅ Validación job {job_id[:8]} completada: "
                       f"{job['total_errors']} errores en {job_elapsed:.1f}s")
 
-        # Flow control: decrement in-flight and send next chunk
         with self._queue_lock:
             self.in_flight[node_id] = max(0, self.in_flight.get(node_id, 1) - 1)
         self._send_next_chunk(job_id, node_id)
 
-    # ─── Analyze Job ─────────────────────────────────────────────────────────
-
-    def start_analyze_job(self, filepath: str,
-                          distribution_mode: str = "all",
-                          target_node: str = None,
-                          chunk_size: int = CHUNK_SIZE) -> dict:
-        """
-        Start a DNA validation/analysis job.
-        Detects invalid characters (≠ ACGTN) and reports row/col positions.
-        File reading is done with CPU, processing distributed to workers (GPU).
-        """
+    def start_analyze_job(self, filepath: str, distribution_mode: str = "all",
+                          target_node: str = None, chunk_size: int = CHUNK_SIZE) -> dict:
         path = Path(filepath).expanduser().resolve()
         if not path.exists():
             raise FileNotFoundError(f"Archivo no encontrado: {path}")
         if not path.is_file():
             raise ValueError(f"La ruta no es un archivo: {path}")
 
-        # Get available workers
         with self.workers_lock:
-            active = [
-                (nid, w) for nid, w in self.workers.items()
-                if w.connected and w.enabled
-            ]
+            active = [(nid, w) for nid, w in self.workers.items() if w.connected and w.enabled]
 
         if not active:
             raise RuntimeError("No hay workers conectados y habilitados")
 
         if distribution_mode == "specific" and target_node:
-            available_ids = []
-            for nid, w in active:
-                if nid == target_node or w.node_name == target_node:
-                    available_ids.append(nid)
+            available_ids = [nid for nid, w in active if nid == target_node or w.node_name == target_node]
             if not available_ids:
                 raise RuntimeError(f"Nodo '{target_node}' no encontrado")
         elif distribution_mode == "exclude_master":
@@ -1439,21 +1248,12 @@ class DistributedCoordinator:
 
         job_id = str(uuid.uuid4())
         job = {
-            "id": job_id,
-            "type": "analyze",
-            "filepath": str(path),
-            "filename": path.name,
-            "distribution_mode": distribution_mode,
-            "status": "reading",
-            "events": [],
-            "total_errors": 0,
-            "all_error_details": [],
-            "chunks_completed": 0,
-            "total_chunks": 0,
-            "lines_processed": 0,
-            "node_stats": {},
-            "start_time": time.time(),
-            "elapsed": 0,
+            "id": job_id, "type": "analyze",
+            "filepath": str(path), "filename": path.name,
+            "distribution_mode": distribution_mode, "status": "reading", "events": [],
+            "total_errors": 0, "all_error_details": [],
+            "chunks_completed": 0, "total_chunks": 0, "lines_processed": 0,
+            "node_stats": {}, "start_time": time.time(), "elapsed": 0,
         }
 
         with self.jobs_lock:
@@ -1469,18 +1269,11 @@ class DistributedCoordinator:
         t.start()
 
         return {
-            "job_id": job_id,
-            "filename": path.name,
-            "distribution_mode": distribution_mode,
-            "workers": available_ids,
+            "job_id": job_id, "filename": path.name,
+            "distribution_mode": distribution_mode, "workers": available_ids,
         }
 
-    def _run_analyze_job(self, job_id: str, filepath: Path,
-                         worker_ids: list, chunk_size: int):
-        """Background thread to run a validation/analysis job.
-        FILE READING is done with CPU.
-        VALIDATION is sent to workers for GPU processing.
-        """
+    def _run_analyze_job(self, job_id: str, filepath: Path, worker_ids: list, chunk_size: int):
         with self.jobs_lock:
             job = self.jobs[job_id]
 
@@ -1496,11 +1289,9 @@ class DistributedCoordinator:
             job["events"].append({
                 "type": "info",
                 "data": {
-                    "total_lines": total_lines,
-                    "filename": filepath.name,
+                    "total_lines": total_lines, "filename": filepath.name,
                     "workers": worker_ids,
-                    "read_time": round(read_elapsed, 2),
-                    "read_mode": "CPU",
+                    "read_time": round(read_elapsed, 2), "read_mode": "CPU",
                 },
             })
 
@@ -1509,7 +1300,6 @@ class DistributedCoordinator:
                 job["events"].append({"type": "error", "data": "El archivo no tiene líneas de ADN."})
                 return
 
-            # Create chunks
             chunks = []
             for i in range(0, total_lines, chunk_size):
                 end = min(i + chunk_size, total_lines)
@@ -1520,14 +1310,10 @@ class DistributedCoordinator:
                 chunk_data = {
                     "type": "CHUNK_VALIDATE",
                     "data": {
-                        "chunk_id": chunk_id,
-                        "job_id": job_id,
+                        "chunk_id": chunk_id, "job_id": job_id,
                         "chunk_index": len(chunks),
-                        "lines": lines,
-                        "row_numbers": row_numbers,
-                        "start_line": i,
-                        "end_line": end,
-                        "total_chunks": 0,
+                        "lines": lines, "row_numbers": row_numbers,
+                        "start_line": i, "end_line": end, "total_chunks": 0,
                     },
                 }
                 chunks.append((chunk_id, chunk_data))
@@ -1540,18 +1326,15 @@ class DistributedCoordinator:
             job["status"] = "processing"
             job["events"].append({"type": "status", "data": "processing"})
 
-            # Store pending chunks
             self.pending_chunks[job_id] = {}
             for chunk_id, chunk_data in chunks:
                 self.pending_chunks[job_id][chunk_id] = chunk_data
 
-            # Distribute with flow control (same as compare job)
             with self._queue_lock:
                 self.chunks_queue[job_id] = list(chunks)
                 for wid in worker_ids:
                     self.in_flight[wid] = 0
 
-            # Send initial batch
             sent = 0
             for wid in worker_ids:
                 for _ in range(WINDOW_SIZE):
@@ -1569,47 +1352,25 @@ class DistributedCoordinator:
             print(f"  ❌ Error en validación job {job_id[:8]}: {e}")
 
     def restore_state(self, state_file: str):
-        """Restore coordinator state from a failover state file.
-        Re-reads original files and redistributes only pending chunks.
-        """
         try:
             with open(state_file, "r") as f:
                 saved = json.load(f)
             state = saved.get("state", {})
-            workers_state = state.get("workers", {})
             active_jobs = state.get("active_jobs", {})
             print(f"  🔄 Restaurando estado de failover...")
-            print(f"  💾 {len(workers_state)} workers previos")
-            print(f"  💾 {len(active_jobs)} jobs activos a recuperar")
-            print(f"  💾 Promovido por nodo: {saved.get('promoted_by', 'unknown')}")
-
             self._failover_state = state
             Path(state_file).unlink(missing_ok=True)
-
             if active_jobs:
-                # Start recovery in a thread (wait for workers to connect first)
-                t = threading.Thread(
-                    target=self._recover_jobs, args=(active_jobs,),
-                    daemon=True
-                )
+                t = threading.Thread(target=self._recover_jobs, args=(active_jobs,), daemon=True)
                 t.start()
-                print(f"  ⏳ Recuperación de jobs iniciada (esperando workers...)")
-
         except Exception as e:
             print(f"  ⚠ Error restaurando estado: {e}")
-            import traceback
-            traceback.print_exc()
 
     def _recover_jobs(self, active_jobs: dict):
-        """Background thread: wait for workers, then re-read files and redistribute."""
-        # Wait up to 30s for at least one worker to connect
         for i in range(30):
             time.sleep(1)
             with self.workers_lock:
-                connected = [
-                    nid for nid, w in self.workers.items()
-                    if w.connected and w.enabled
-                ]
+                connected = [nid for nid, w in self.workers.items() if w.connected and w.enabled]
             if connected:
                 print(f"\n  ✅ {len(connected)} worker(s) reconectados — iniciando recuperación")
                 break
@@ -1622,75 +1383,41 @@ class DistributedCoordinator:
                 self._recover_single_job(job_id, job_state)
             except Exception as e:
                 print(f"  ❌ Error recuperando job {job_id[:8]}: {e}")
-                import traceback
-                traceback.print_exc()
 
     def _resolve_file(self, filepath: str) -> Path | None:
-        """Resolve a file path for failover recovery.
-        Tries: 1) absolute path, 2) by filename in project dir, 3) recursive search.
-        Handles cross-platform paths (Windows paths on Linux and vice versa)."""
         p = Path(filepath)
         if p.exists():
             return p
-
-        # Extract filename handling both Windows and Unix separators
-        # On Linux, Path("C:\\Users\\file.fna").name returns the whole string
         filename = filepath.replace("\\", "/").split("/")[-1]
-
-        # Try by filename in this project's directory
         project_dir = Path(__file__).parent
         local = project_dir / filename
         if local.exists():
-            print(f"  📂 Archivo encontrado en directorio local: {local}")
             return local
-
-        # Recursive search in project dir (1 level deep)
         for child in project_dir.iterdir():
             if child.is_file() and child.name == filename:
-                print(f"  📂 Archivo encontrado: {child}")
                 return child
             if child.is_dir():
                 candidate = child / filename
                 if candidate.exists():
-                    print(f"  📂 Archivo encontrado: {candidate}")
                     return candidate
-
         return None
 
     def _recover_single_job(self, old_job_id: str, job_state: dict):
-        """Re-read files, create chunks, skip completed, distribute remaining."""
         job_type = job_state.get("type", "compare")
-        completed_ids = set(job_state.get("completed_chunk_ids", []))
         chunks_completed = job_state.get("chunks_completed", 0)
         chunk_size = job_state.get("chunk_size", CHUNK_SIZE)
 
         print(f"\n  🔄 Recuperando job {old_job_id[:8]} (tipo: {job_type})")
-        print(f"  📊 Progreso anterior: {chunks_completed} chunks completados")
 
         if job_type == "compare":
             filepath_a = job_state.get("filepath_a", "")
             filepath_b = job_state.get("filepath_b", "")
-            if not filepath_a or not filepath_b:
-                print(f"  ❌ Rutas de archivo no disponibles")
-                return
-
-            print(f"  📖 Re-leyendo archivos...")
-            print(f"     A: {filepath_a}")
-            print(f"     B: {filepath_b}")
-
             path_a = self._resolve_file(filepath_a)
             path_b = self._resolve_file(filepath_b)
             if not path_a or not path_b:
-                missing = []
-                if not path_a: missing.append(f"A: {filepath_a}")
-                if not path_b: missing.append(f"B: {filepath_b}")
-                print(f"  ❌ Archivos no encontrados (ni ruta absoluta ni en directorio del proyecto):")
-                for m in missing:
-                    print(f"     {m}")
-                print(f"  💡 Tip: copia los archivos al directorio del proyecto para que el failover los encuentre")
+                print(f"  ❌ Archivos no encontrados para recuperación")
                 return
 
-            # Re-read and re-chunk
             lines_a = self._read_dna_lines(path_a)
             lines_b = self._read_dna_lines(path_b)
             total_lines = min(len(lines_a), len(lines_b))
@@ -1702,14 +1429,10 @@ class DistributedCoordinator:
                 chunk_data = {
                     "type": "CHUNK_COMPARE",
                     "data": {
-                        "chunk_id": chunk_id,
-                        "job_id": old_job_id,
+                        "chunk_id": chunk_id, "job_id": old_job_id,
                         "chunk_index": len(chunks),
-                        "lines_a": lines_a[i:end],
-                        "lines_b": lines_b[i:end],
-                        "start_line": i,
-                        "end_line": end,
-                        "total_chunks": 0,
+                        "lines_a": lines_a[i:end], "lines_b": lines_b[i:end],
+                        "start_line": i, "end_line": end, "total_chunks": 0,
                     },
                 }
                 chunks.append((chunk_id, chunk_data))
@@ -1718,140 +1441,21 @@ class DistributedCoordinator:
             for _, cd in chunks:
                 cd["data"]["total_chunks"] = total_chunks
 
-            # Only distribute chunks that were NOT completed
-            # Since chunk IDs are new, we skip by index
             pending_chunks = chunks[chunks_completed:]
 
-            print(f"  📊 Total chunks: {total_chunks}, ya completados: {chunks_completed}, "
-                  f"pendientes: {len(pending_chunks)}")
-
-            # Create recovered job
             job = {
-                "id": old_job_id,
-                "type": "compare",
-                "filepath_a": str(path_a),
-                "filepath_b": str(path_b),
-                "filename_a": path_a.name,
-                "filename_b": path_b.name,
+                "id": old_job_id, "type": "compare",
+                "filepath_a": str(path_a), "filepath_b": str(path_b),
+                "filename_a": path_a.name, "filename_b": path_b.name,
                 "distribution_mode": job_state.get("distribution_mode", "all"),
-                "status": "processing",
-                "events": [{"type": "status", "data": "recovered"}],
+                "status": "processing", "events": [{"type": "status", "data": "recovered"}],
                 "total_matches": job_state.get("total_matches", 0),
                 "total_compared": job_state.get("total_compared", 0),
-                "chunks_completed": chunks_completed,
-                "total_chunks": total_chunks,
+                "chunks_completed": chunks_completed, "total_chunks": total_chunks,
                 "lines_processed": job_state.get("lines_processed", 0),
-                "total_lines": total_lines,
-                "node_stats": {},
+                "total_lines": total_lines, "node_stats": {},
                 "start_time": job_state.get("start_time", time.time()),
-                "elapsed": 0,
-                "similarity": 0,
-            }
-
-            with self.jobs_lock:
-                self.jobs[old_job_id] = job
-
-            # Store pending chunks
-            self.pending_chunks[old_job_id] = {}
-            for chunk_id, chunk_data in pending_chunks:
-                self.pending_chunks[old_job_id][chunk_id] = chunk_data
-
-            # Get worker IDs
-            with self.workers_lock:
-                worker_ids = [
-                    nid for nid, w in self.workers.items()
-                    if w.connected and w.enabled
-                ]
-
-            # Distribute via flow control
-            with self._queue_lock:
-                self.chunks_queue[old_job_id] = list(pending_chunks)
-                for wid in worker_ids:
-                    self.in_flight[wid] = 0
-
-            sent = 0
-            for wid in worker_ids:
-                for _ in range(WINDOW_SIZE):
-                    if self._send_next_chunk(old_job_id, wid):
-                        sent += 1
-                    else:
-                        break
-
-            print(f"  ✅ Job {old_job_id[:8]} recuperado: {sent} chunks enviados, "
-                  f"{len(pending_chunks) - sent} en cola")
-
-        elif job_type == "analyze":
-            filepath = job_state.get("filepath", "")
-            if not filepath:
-                print(f"  ❌ Ruta de archivo no disponible")
-                return
-
-            path = self._resolve_file(filepath)
-            if not path:
-                print(f"  ❌ Archivo no encontrado: {filepath}")
-                print(f"  💡 Tip: copia el archivo al directorio del proyecto")
-                return
-
-            print(f"  📖 Re-leyendo archivo: {filepath}")
-            lines_with_rows = []
-            row = 0
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
-                for raw_line in f:
-                    row += 1
-                    line = raw_line.rstrip("\n\r")
-                    if line.lstrip().startswith(">"):
-                        continue
-                    if not line.strip():
-                        continue
-                    lines_with_rows.append((row, line))
-
-            total_lines = len(lines_with_rows)
-            chunks = []
-            for i in range(0, total_lines, chunk_size):
-                end = min(i + chunk_size, total_lines)
-                chunk_id = str(uuid.uuid4())[:12]
-                batch = lines_with_rows[i:end]
-                row_numbers = [r for r, _ in batch]
-                lines = [l for _, l in batch]
-                chunk_data = {
-                    "type": "CHUNK_VALIDATE",
-                    "data": {
-                        "chunk_id": chunk_id,
-                        "job_id": old_job_id,
-                        "chunk_index": len(chunks),
-                        "lines": lines,
-                        "row_numbers": row_numbers,
-                        "start_line": i,
-                        "end_line": end,
-                        "total_chunks": 0,
-                    },
-                }
-                chunks.append((chunk_id, chunk_data))
-
-            total_chunks = len(chunks)
-            for _, cd in chunks:
-                cd["data"]["total_chunks"] = total_chunks
-
-            pending_chunks = chunks[chunks_completed:]
-
-            print(f"  📊 Total chunks: {total_chunks}, completados: {chunks_completed}, "
-                  f"pendientes: {len(pending_chunks)}")
-
-            job = {
-                "id": old_job_id,
-                "type": "analyze",
-                "filepath": str(path),
-                "filename": path.name,
-                "status": "processing",
-                "events": [{"type": "status", "data": "recovered"}],
-                "total_errors": job_state.get("total_errors", 0),
-                "chunks_completed": chunks_completed,
-                "total_chunks": total_chunks,
-                "lines_processed": job_state.get("lines_processed", 0),
-                "total_lines": total_lines,
-                "node_stats": {},
-                "start_time": job_state.get("start_time", time.time()),
-                "elapsed": 0,
+                "elapsed": 0, "similarity": 0,
             }
 
             with self.jobs_lock:
@@ -1862,10 +1466,7 @@ class DistributedCoordinator:
                 self.pending_chunks[old_job_id][chunk_id] = chunk_data
 
             with self.workers_lock:
-                worker_ids = [
-                    nid for nid, w in self.workers.items()
-                    if w.connected and w.enabled
-                ]
+                worker_ids = [nid for nid, w in self.workers.items() if w.connected and w.enabled]
 
             with self._queue_lock:
                 self.chunks_queue[old_job_id] = list(pending_chunks)
@@ -1880,26 +1481,23 @@ class DistributedCoordinator:
                     else:
                         break
 
-            print(f"  ✅ Job validación {old_job_id[:8]} recuperado: {sent} chunks enviados")
+            print(f"  ✅ Job {old_job_id[:8]} recuperado: {sent} chunks enviados")
 
     def stop(self):
-        """Stop the coordinator."""
         self.running = False
-        # Send SHUTDOWN multiple times to ensure delivery
         for _ in range(3):
             try:
                 self.pub.send_json({"type": "SHUTDOWN"})
                 time.sleep(0.3)
             except Exception:
                 break
-        time.sleep(0.5)  # Let messages flush
+        time.sleep(0.5)
         try:
             self.router.close()
             self.pub.close()
             self.context.term()
         except Exception:
             pass
-        # Clean up active coordinator file (only if we own it)
         try:
             if ACTIVE_COORD_FILE.exists():
                 info = json.loads(ACTIVE_COORD_FILE.read_text())
@@ -1943,15 +1541,11 @@ def system_info():
         "zmq_port": coordinator.zmq_port,
         "cpu_count": mp.cpu_count(),
         "gpu": {
-            "available": GPU_AVAILABLE,
-            "name": GPU_NAME,
-            "driver": GPU_DRIVER,
-            "platform": GPU_PLATFORM_NAME,
-            "device_type": GPU_DEVICE_TYPE,
+            "available": GPU_AVAILABLE, "name": GPU_NAME, "driver": GPU_DRIVER,
+            "platform": GPU_PLATFORM_NAME, "device_type": GPU_DEVICE_TYPE,
             "compute_units": GPU_COMPUTE_UNITS,
             "max_work_group_size": GPU_MAX_WORK_GROUP,
-            "global_memory": GPU_GLOBAL_MEM,
-            "local_memory": GPU_LOCAL_MEM,
+            "global_memory": GPU_GLOBAL_MEM, "local_memory": GPU_LOCAL_MEM,
         },
     })
 
@@ -1968,7 +1562,6 @@ def get_workers():
 
 @app.route("/api/workers/<node_id>/toggle", methods=["POST"])
 def toggle_worker(node_id):
-    """Enable or disable a worker node."""
     if not coordinator:
         return jsonify({"error": "Coordinator not initialized"}), 500
     data = request.get_json()
@@ -1980,7 +1573,6 @@ def toggle_worker(node_id):
 
 @app.route("/api/workers/<node_id>/remove", methods=["DELETE"])
 def remove_worker(node_id):
-    """Remove a worker node completely."""
     if not coordinator:
         return jsonify({"error": "Coordinator not initialized"}), 500
     if coordinator.remove_worker(node_id):
@@ -1990,7 +1582,6 @@ def remove_worker(node_id):
 
 @app.route("/api/workers/<node_id>/gpu-config", methods=["POST"])
 def configure_gpu(node_id):
-    """Configure GPU settings for a worker."""
     if not coordinator:
         return jsonify({"error": "Coordinator not initialized"}), 500
     data = request.get_json()
@@ -2003,7 +1594,6 @@ def configure_gpu(node_id):
 
 @app.route("/api/workers/<node_id>/cpu-config", methods=["POST"])
 def configure_cpu(node_id):
-    """Configure CPU cores for a worker."""
     if not coordinator:
         return jsonify({"error": "Coordinator not initialized"}), 500
     data = request.get_json()
@@ -2017,17 +1607,14 @@ def configure_cpu(node_id):
 def compare():
     if not coordinator:
         return jsonify({"error": "Coordinator not initialized"}), 500
-
     data = request.get_json()
     filepath_a = data.get("filepath_a", "").strip()
     filepath_b = data.get("filepath_b", "").strip()
     distribution_mode = data.get("distribution_mode", "all").strip()
     target_node = data.get("target_node", "").strip() or None
     chunk_size = int(data.get("chunk_size", CHUNK_SIZE))
-
     if not filepath_a or not filepath_b:
         return jsonify({"error": "Se requieren ambos archivos."}), 400
-
     try:
         result = coordinator.start_compare_job(
             filepath_a, filepath_b,
@@ -2044,25 +1631,19 @@ def compare():
 
 @app.route("/api/analyze", methods=["POST"])
 def analyze():
-    """Start a distributed DNA validation job (detect invalid characters)."""
     if not coordinator:
         return jsonify({"error": "Coordinator not initialized"}), 500
-
     data = request.get_json()
     filepath = data.get("filepath", "").strip()
     distribution_mode = data.get("distribution_mode", "all").strip()
     target_node = data.get("target_node", "").strip() or None
     chunk_size = int(data.get("chunk_size", CHUNK_SIZE))
-
     if not filepath:
         return jsonify({"error": "Se requiere la ruta del archivo."}), 400
-
     try:
         result = coordinator.start_analyze_job(
-            filepath,
-            distribution_mode=distribution_mode,
-            target_node=target_node,
-            chunk_size=chunk_size,
+            filepath, distribution_mode=distribution_mode,
+            target_node=target_node, chunk_size=chunk_size,
         )
         return jsonify(result)
     except FileNotFoundError as e:
@@ -2076,25 +1657,18 @@ def browse():
     data = request.get_json()
     dir_path = data.get("path", "~")
     path = Path(dir_path).expanduser().resolve()
-
     if not path.exists() or not path.is_dir():
         path = Path.home()
-
     entries = []
     try:
         if path.parent != path:
-            entries.append({
-                "name": "..", "path": str(path.parent),
-                "is_dir": True, "size": 0,
-            })
-        for item in sorted(path.iterdir(),
-                           key=lambda x: (not x.is_dir(), x.name.lower())):
+            entries.append({"name": "..", "path": str(path.parent), "is_dir": True, "size": 0})
+        for item in sorted(path.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
             if item.name.startswith("."):
                 continue
             try:
                 entries.append({
-                    "name": item.name,
-                    "path": str(item),
+                    "name": item.name, "path": str(item),
                     "is_dir": item.is_dir(),
                     "size": item.stat().st_size if item.is_file() else 0,
                 })
@@ -2102,7 +1676,6 @@ def browse():
                 continue
     except PermissionError:
         pass
-
     return jsonify({"current": str(path), "entries": entries})
 
 
@@ -2110,7 +1683,6 @@ def browse():
 def stream(job_id):
     if not coordinator:
         return jsonify({"error": "Coordinator not initialized"}), 500
-
     with coordinator.jobs_lock:
         if job_id not in coordinator.jobs:
             return jsonify({"error": "Job not found"}), 404
@@ -2124,11 +1696,9 @@ def stream(job_id):
                     break
                 events = job["events"]
                 status = job["status"]
-
             while idx < len(events):
                 yield f"data: {json.dumps(events[idx])}\n\n"
                 idx += 1
-
             if status in ("done", "error"):
                 break
             time.sleep(0.3)
@@ -2138,7 +1708,6 @@ def stream(job_id):
 
 @app.route("/api/workers/stream")
 def stream_workers():
-    """SSE endpoint for real-time worker status updates."""
     if not coordinator:
         return jsonify({"error": "Coordinator not initialized"}), 500
 
@@ -2155,27 +1724,22 @@ def stream_workers():
 
 # ─── Main ──────────────────────────────────────────────────────────────────
 
-def _check_existing_coordinator(zmq_port: int) -> str | None:
-    """Check if there's already an active coordinator.
-    Uses: 1) local file, 2) UDP LAN broadcast discovery.
-    Returns its address if found, None otherwise."""
+def _check_existing_coordinator(zmq_port: int, no_udp: bool = False) -> str | None:
+    """Check if there's already an active coordinator (local file only en modo cloud)."""
 
-    # --- Method 1: Check local file ---
+    # Method 1: local file
     if ACTIVE_COORD_FILE.exists():
         try:
             info = json.loads(ACTIVE_COORD_FILE.read_text())
             addr = info.get("addr", "")
             pid = info.get("pid", 0)
-
             if pid:
                 try:
                     os.kill(pid, 0)
                 except OSError:
                     ACTIVE_COORD_FILE.unlink(missing_ok=True)
-                    addr = ""  # Don't return, try UDP too
-
+                    addr = ""
             if addr:
-                # Verify it's actually alive via ZMQ
                 ctx = zmq.Context()
                 sub = ctx.socket(zmq.SUB)
                 sub.setsockopt(zmq.SUBSCRIBE, b"")
@@ -2195,7 +1759,12 @@ def _check_existing_coordinator(zmq_port: int) -> str | None:
         except Exception:
             pass
 
-    # --- Method 2: UDP LAN broadcast discovery ---
+    # ☁️  CLOUD: omitir UDP discovery si no_udp está activo
+    if no_udp:
+        print("  ✅ Modo cloud: omitiendo búsqueda UDP")
+        return None
+
+    # Method 2: UDP LAN broadcast
     print("  🔍 Buscando coordinador existente en la red (4s)...")
     try:
         udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -2211,21 +1780,16 @@ def _check_existing_coordinator(zmq_port: int) -> str | None:
                 if msg.get("type") == "COORDINATOR_ANNOUNCE":
                     addr = msg.get("addr", "")
                     if addr:
-                        print(f"  📡 Coordinador encontrado vía UDP: {addr} "
-                              f"(desde {sender_addr[0]})")
+                        print(f"  📡 Coordinador encontrado vía UDP: {addr}")
                         udp_sock.close()
                         return addr
             except socket.timeout:
                 break
             except Exception:
                 continue
-
         udp_sock.close()
     except OSError as e:
-        # Port might be in use by the coordinator itself
-        if "Address already in use" in str(e):
-            pass
-        else:
+        if "Address already in use" not in str(e):
             print(f"  ⚠ Error en descubrimiento UDP: {e}")
     except Exception:
         pass
@@ -2239,33 +1803,43 @@ def main():
 
     parser = argparse.ArgumentParser(
         prog="dna_distributed_coordinator",
-        description="Coordinador distribuido para comparación de ADN v2.0",
+        description="Coordinador distribuido para comparación de ADN v2.0 (Cloud Edition)",
+    )
+    parser.add_argument("--port", "-p", default=5555, type=int,
+                        help="Puerto ZMQ para workers (default: 5555)")
+    parser.add_argument("--web-port", "-w", default=5000, type=int,
+                        help="Puerto para la interfaz web Flask (default: 5000)")
+    parser.add_argument("--restore-state", default=None, type=str,
+                        help="Ruta al archivo de estado para restaurar después de failover")
+
+    # ☁️  CLOUD: nuevos argumentos
+    parser.add_argument(
+        "--public-ip", default=None, type=str,
+        help="☁️  IP pública del servidor (ej: 34.68.177.178). "
+             "Workers usarán esta IP para conectarse."
     )
     parser.add_argument(
-        "--port", "-p", default=5555, type=int,
-        help="Puerto ZMQ para comunicación con workers (default: 5555)",
+        "--no-udp-broadcast", action="store_true",
+        help="☁️  Desactiva el broadcast UDP (usar en cloud/internet, no en LAN)"
     )
     parser.add_argument(
-        "--web-port", "-w", default=5000, type=int,
-        help="Puerto para la interfaz web Flask (default: 5000)",
+        "--secret", default="", type=str,
+        help="☁️  Clave secreta compartida. Solo workers con la misma clave pueden conectarse."
     )
-    parser.add_argument(
-        "--restore-state", default=None, type=str,
-        help="Ruta al archivo de estado para restaurar después de failover",
-    )
+
     args = parser.parse_args()
 
-    # Check if there's already a coordinator running
-    existing = _check_existing_coordinator(args.port)
+    # Check for existing coordinator
+    existing = _check_existing_coordinator(args.port, no_udp=args.no_udp_broadcast)
     if existing:
         print(f"\n{'='*60}")
         print(f"  ⚠️  Ya existe un coordinador activo en {existing}")
         print(f"  🔄 Iniciando como WORKER en vez de coordinador...")
         print(f"{'='*60}\n")
 
-        # Import and run as worker
         from dna_distributed_node import WorkerNode
-        node = WorkerNode(existing, f"ex-coord-{socket.gethostname()}")
+        node = WorkerNode(existing, f"ex-coord-{socket.gethostname()}",
+                          secret=args.secret)
 
         def signal_handler(sig, frame):
             print("\n  🛑 Señal de interrupción recibida")
@@ -2273,16 +1847,17 @@ def main():
 
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
-
         node.start()
         return
 
     coordinator = DistributedCoordinator(
         zmq_port=args.port,
         web_port=args.web_port,
+        public_ip=args.public_ip,
+        no_udp_broadcast=args.no_udp_broadcast,
+        secret=args.secret,
     )
 
-    # Restore state from failover if provided
     if args.restore_state:
         coordinator.restore_state(args.restore_state)
 
@@ -2296,13 +1871,7 @@ def main():
 
     coordinator.start()
 
-    # Start Flask
-    app.run(
-        host="0.0.0.0",
-        port=args.web_port,
-        debug=False,
-        threaded=True,
-    )
+    app.run(host="0.0.0.0", port=args.web_port, debug=False, threaded=True)
 
 
 if __name__ == "__main__":
