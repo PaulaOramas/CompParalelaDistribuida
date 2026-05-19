@@ -19,7 +19,7 @@ set -e
 # ─── CONFIGURACIÓN — editar estos valores ───────────────────────
 COORDINATOR_IP="34.68.177.178"       # IP pública de la VM Google Cloud
 COORDINATOR_PORT="5555"
-REPO_URL="https://github.com/TU_USUARIO/TU_REPO.git"  # ← cambiar por tu repo
+REPO_URL="https://github.com/PaulaOramas/CompParalelaDistribuida"  # ← cambiar por tu repo
 REPO_DIR="dna_checker"
 # ────────────────────────────────────────────────────────────────
 
