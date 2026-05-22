@@ -1396,10 +1396,7 @@
                                 <div class="stat-value accent" id="stat-chunks">0/0</div>
                                 <div class="stat-label">Chunks</div>
                             </div>
-                            <div class="stat-box">
-                                <div class="stat-value info" id="stat-lines">0</div>
-                                <div class="stat-label">Líneas</div>
-                            </div>
+                           
                             <div class="stat-box">
                                 <div class="stat-value success" id="stat-matches">0</div>
                                 <div class="stat-label">Coincidencias</div>
@@ -1946,8 +1943,8 @@
                     ${data.total_errors > 0 ? 'Errores encontrados' : 'Sin errores — ADN válido'}
                 </div>
                 <div style="text-align:center; margin-top:8px; color:var(--text-secondary); font-size:12px;">
-                    ${formatNumber(data.lines_processed)} líneas procesadas en ${data.elapsed}s
-                </div>
+    Procesado en ${data.elapsed}s
+</div>
             `;
 
             // Show error details table
@@ -1987,7 +1984,6 @@
             }
 
             addLog('success', `✅ Validación completada: ${formatNumber(data.total_errors)} errores`);
-            addLog('info', `Líneas procesadas: ${formatNumber(data.lines_processed)}`);
             addLog('info', `Tiempo total: ${data.elapsed}s`);
         }
 
@@ -2095,7 +2091,7 @@
             const filepath = document.getElementById('filepath-analyze').value.trim();
             const distMode = document.querySelector('input[name="dist-mode"]:checked').value;
             const targetNode = document.getElementById('target-node').value;
-            const chunkSize = parseInt(document.getElementById('chunk-size-analyze').value) || 50000;
+            const chunkSize = 20;
 
             document.getElementById('results-section').style.display = 'block';
             document.getElementById('similarity-gauge').style.display = 'none';
