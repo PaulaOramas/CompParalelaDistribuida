@@ -1248,12 +1248,11 @@
                     </div>
                 </div>
 
-                <div class="chunk-control">
-                    <label>Líneas por chunk:</label>
-                    <input type="number" class="chunk-input" id="chunk-size"
-                           value="8000" min="1000" max="500000">
-                </div>
-
+                <div class="chunk-control" style="display:none">
+    <label>Líneas por chunk:</label>
+    <input type="number" class="chunk-input" id="chunk-size"
+           value="20" min="0" max="20">
+</div>
                 <div class="start-section">
                     <button class="btn btn-success btn-start" id="btn-start"
                             onclick="startCompare()" disabled>
@@ -1324,10 +1323,10 @@
                     </div>
                 </div>
 
-                <div class="chunk-control" style="display:none">
+               <div class="chunk-control" style="display:none">
     <label>Líneas por chunk:</label>
-    <input type="number" class="chunk-input" id="chunk-size-analyze"
-           value="20" min="0" max="30">
+    <input type="number" class="chunk-input" id="chunk-size"
+           value="20" min="0" max="20">
 </div>
 
                 <div class="start-section">
