@@ -596,6 +596,18 @@ class WorkerNode:
                 "--no-udp-broadcast",
                 "--secret", self.secret,
             ]
+            # Guardar estado antes de levantar el coordinador
+            if self.last_coordinator_state:
+                state_file = str(Path(__file__).parent / ".failover_state.json")
+                import json
+                with open(state_file, "w") as f:
+                    json.dump({
+                        "timestamp": time.time(),
+                        "state": self.last_coordinator_state,
+                        "promoted_by": self.node_id,
+                    }, f)
+                cmd.extend(["--restore-state", state_file])
+
             subprocess.Popen(cmd)
             time.sleep(4)
             self._reconnect_to_coordinator(f"{self.public_ip}:5555")
