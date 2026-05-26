@@ -10,7 +10,7 @@ chunks de comparación de ADN de forma distribuida.
   3. AWS-1         3.128.40.215:5555    (respaldo 2)
   4. AWS-2         3.142.169.79:5555    (respaldo 3)
   5. Google Cloud  34.68.177.178:5555   (respaldo 4)
-  # Digital Ocean  pendiente
+  6. Ocean         204.48.16.46:5555   (respaldo 5)  
 
 Uso:
     python dna_distributed_node.py --coordinator 172.233.178.55:5555 --secret dna2024
