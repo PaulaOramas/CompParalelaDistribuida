@@ -1,0 +1,2005 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DNA Unified Checker v4.0</title>
+    <meta name="description" content="Detector de nucleótidos inválidos en ADN — CPU o GPU" />
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
+        rel="stylesheet" />
+    <style>
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0
+        }
+
+        :root {
+            --bg: #06080f;
+            --bg2: #0c1021;
+            --card: rgba(14, 20, 40, .65);
+            --card-h: rgba(20, 28, 55, .75);
+            --brd: rgba(56, 189, 248, .12);
+            --brd-g: rgba(56, 189, 248, .25);
+            --t1: #e8ecf4;
+            --t2: #8892a8;
+            --t3: #556078;
+            --cyan: #38bdf8;
+            --purple: #a78bfa;
+            --green: #34d399;
+            --red: #f87171;
+            --amber: #fbbf24;
+            --g1: linear-gradient(135deg, #38bdf8, #a78bfa, #818cf8);
+            --g2: linear-gradient(135deg, #06b6d4, #3b82f6);
+            --g-gpu: linear-gradient(135deg, #7c3aed, #a78bfa, #c084fc);
+            --rad: 16px;
+            --rad-s: 10px;
+            --tr: all .3s cubic-bezier(.4, 0, .2, 1);
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg);
+            color: var(--t1);
+            min-height: 100vh;
+            overflow-x: hidden;
+            line-height: 1.6
+        }
+
+        .bg-mesh {
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+            pointer-events: none
+        }
+
+        .bg-mesh::before {
+            content: '';
+            position: absolute;
+            width: 800px;
+            height: 800px;
+            top: -200px;
+            left: -200px;
+            background: radial-gradient(circle, rgba(56, 189, 248, .06) 0%, transparent 70%);
+            animation: fb 20s ease-in-out infinite
+        }
+
+        .bg-mesh::after {
+            content: '';
+            position: absolute;
+            width: 600px;
+            height: 600px;
+            bottom: -100px;
+            right: -100px;
+            background: radial-gradient(circle, rgba(167, 139, 250, .06) 0%, transparent 70%);
+            animation: fb 25s ease-in-out infinite reverse
+        }
+
+        @keyframes fb {
+
+            0%,
+            100% {
+                transform: translate(0, 0) scale(1)
+            }
+
+            33% {
+                transform: translate(80px, -60px) scale(1.1)
+            }
+
+            66% {
+                transform: translate(-40px, 40px) scale(.95)
+            }
+        }
+
+        @keyframes shimmer {
+            0% {
+                transform: translateX(-100%)
+            }
+
+            100% {
+                transform: translateX(100%)
+            }
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg)
+            }
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px)
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0)
+            }
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                box-shadow: 0 8px 30px rgba(56, 189, 248, .2)
+            }
+
+            50% {
+                box-shadow: 0 8px 40px rgba(56, 189, 248, .35)
+            }
+        }
+
+        .fade-in {
+            animation: fadeIn .5s ease forwards
+        }
+
+        .app {
+            position: relative;
+            z-index: 1;
+            max-width: 920px;
+            margin: 0 auto;
+            padding: 40px 24px 60px
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 48px
+        }
+
+        .logo {
+            display: inline-flex;
+            align-items: center;
+            gap: 14px;
+            margin-bottom: 16px
+        }
+
+        .logo-icon {
+            width: 56px;
+            height: 56px;
+            background: var(--g1);
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
+            animation: pulse 3s ease-in-out infinite
+        }
+
+        .header h1 {
+            font-size: 2rem;
+            font-weight: 800;
+            background: var(--g1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text
+        }
+
+        .header .sub {
+            color: var(--t2);
+            font-size: .95rem;
+            margin-top: 6px
+        }
+
+        .badge {
+            display: inline-block;
+            background: rgba(56, 189, 248, .1);
+            color: var(--cyan);
+            font-size: .7rem;
+            font-weight: 600;
+            padding: 3px 10px;
+            border-radius: 20px;
+            border: 1px solid rgba(56, 189, 248, .2);
+            margin-top: 12px;
+            letter-spacing: .5px
+        }
+
+        .card {
+            background: var(--card);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--brd);
+            border-radius: var(--rad);
+            padding: 28px;
+            margin-bottom: 20px;
+            box-shadow: 0 0 40px rgba(56, 189, 248, .08);
+            transition: var(--tr)
+        }
+
+        .card:hover {
+            border-color: var(--brd-g);
+            background: var(--card-h)
+        }
+
+        .card-t {
+            font-size: 1.05rem;
+            font-weight: 700;
+            margin-bottom: 18px;
+            display: flex;
+            align-items: center;
+            gap: 10px
+        }
+
+        .card-t .ic {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px
+        }
+
+        .ic.bl {
+            background: rgba(56, 189, 248, .15)
+        }
+
+        .ic.pu {
+            background: rgba(167, 139, 250, .15)
+        }
+
+        .ic.gr {
+            background: rgba(52, 211, 153, .15)
+        }
+
+        /* Mode selector */
+        .mode-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px
+        }
+
+        .mode-card {
+            position: relative;
+            background: rgba(14, 20, 40, .5);
+            border: 2px solid rgba(56, 189, 248, .1);
+            border-radius: var(--rad);
+            padding: 24px;
+            cursor: pointer;
+            transition: var(--tr);
+            text-align: center;
+            overflow: hidden
+        }
+
+        .mode-card:hover {
+            border-color: rgba(56, 189, 248, .3);
+            background: rgba(20, 28, 55, .6);
+            transform: translateY(-2px)
+        }
+
+        .mode-card.active {
+            border-color: var(--cyan);
+            background: rgba(56, 189, 248, .08)
+        }
+
+        .mode-card.active.gpu-mode {
+            border-color: var(--purple);
+            background: rgba(167, 139, 250, .08)
+        }
+
+        .mode-card .mode-icon {
+            font-size: 36px;
+            margin-bottom: 12px;
+            display: block
+        }
+
+        .mode-card .mode-name {
+            font-size: 1.1rem;
+            font-weight: 700;
+            margin-bottom: 4px
+        }
+
+        .mode-card .mode-desc {
+            font-size: .78rem;
+            color: var(--t2)
+        }
+
+        .mode-card .mode-tag {
+            display: inline-block;
+            margin-top: 10px;
+            font-size: .7rem;
+            font-weight: 600;
+            padding: 3px 10px;
+            border-radius: 12px;
+            letter-spacing: .3px
+        }
+
+        .mode-card.cpu-mode .mode-tag {
+            background: rgba(56, 189, 248, .12);
+            color: var(--cyan)
+        }
+
+        .mode-card.gpu-mode .mode-tag {
+            background: rgba(167, 139, 250, .12);
+            color: var(--purple)
+        }
+
+        .mode-card.disabled {
+            opacity: .45;
+            cursor: not-allowed;
+            pointer-events: none
+        }
+
+        .mode-card .mode-check {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            border: 2px solid rgba(56, 189, 248, .2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            transition: var(--tr)
+        }
+
+        .mode-card.active .mode-check {
+            background: var(--cyan);
+            border-color: var(--cyan);
+            color: #fff
+        }
+
+        .mode-card.active.gpu-mode .mode-check {
+            background: var(--purple);
+            border-color: var(--purple)
+        }
+
+        /* Settings panels */
+        .cpu-settings,
+        .gpu-settings {
+            display: none
+        }
+
+        .cpu-settings.active,
+        .gpu-settings.active {
+            display: block
+        }
+
+        .slider-w {
+            position: relative;
+            padding-top: 4px
+        }
+
+        .slider-v {
+            position: absolute;
+            right: 0;
+            top: -24px;
+            background: var(--g2);
+            color: #fff;
+            font-size: .75rem;
+            font-weight: 700;
+            padding: 3px 10px;
+            border-radius: 6px;
+            font-family: 'JetBrains Mono', monospace
+        }
+
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: rgba(56, 189, 248, .15);
+            outline: none
+        }
+
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: var(--g2);
+            cursor: pointer;
+            box-shadow: 0 2px 10px rgba(56, 189, 248, .3)
+        }
+
+        .tpb-sel {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap
+        }
+
+        .tpb-btn {
+            padding: 10px 18px;
+            background: rgba(139, 92, 246, .06);
+            border: 1px solid rgba(139, 92, 246, .12);
+            border-radius: 8px;
+            color: var(--t2);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: .85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--tr)
+        }
+
+        .tpb-btn:hover {
+            background: rgba(139, 92, 246, .12)
+        }
+
+        .tpb-btn.active {
+            background: var(--g-gpu);
+            color: #fff;
+            border-color: transparent;
+            box-shadow: 0 4px 15px rgba(139, 92, 246, .3)
+        }
+
+        .gpu-info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+            gap: 10px;
+            margin-top: 14px
+        }
+
+        .gpu-stat {
+            background: rgba(139, 92, 246, .06);
+            border: 1px solid rgba(139, 92, 246, .1);
+            border-radius: var(--rad-s);
+            padding: 12px;
+            text-align: center
+        }
+
+        .gpu-stat .gv {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: .9rem;
+            font-weight: 700;
+            color: #c4b5fd
+        }
+
+        .gpu-stat .gl {
+            font-size: .68rem;
+            color: var(--t3);
+            text-transform: uppercase;
+            letter-spacing: .3px;
+            margin-top: 2px;
+            font-weight: 600
+        }
+
+        /* File browser */
+        .fp-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 16px
+        }
+
+        .fp-row input {
+            flex: 1;
+            padding: 14px 18px;
+            background: rgba(14, 20, 40, .8);
+            border: 1px solid rgba(56, 189, 248, .15);
+            border-radius: var(--rad-s);
+            color: var(--t1);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: .88rem;
+            outline: none;
+            transition: var(--tr)
+        }
+
+        .fp-row input:focus {
+            border-color: var(--cyan);
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, .1)
+        }
+
+        .fp-row input::placeholder {
+            color: var(--t3)
+        }
+
+        .btn-br {
+            padding: 14px 22px;
+            background: rgba(56, 189, 248, .1);
+            border: 1px solid rgba(56, 189, 248, .2);
+            border-radius: var(--rad-s);
+            color: var(--cyan);
+            font-family: 'Inter', sans-serif;
+            font-size: .88rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--tr);
+            white-space: nowrap
+        }
+
+        .btn-br:hover {
+            background: rgba(56, 189, 248, .18);
+            border-color: var(--cyan)
+        }
+
+        .file-sel {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: rgba(52, 211, 153, .08);
+            border: 1px solid rgba(52, 211, 153, .2);
+            border-radius: var(--rad-s);
+            padding: 14px 20px;
+            margin-top: 12px
+        }
+
+        .file-sel .fn {
+            font-weight: 600;
+            font-size: .9rem;
+            color: var(--green)
+        }
+
+        .file-sel .fpath {
+            font-size: .75rem;
+            color: var(--t3);
+            font-family: 'JetBrains Mono', monospace;
+            word-break: break-all
+        }
+
+        .file-sel .frm {
+            background: none;
+            border: none;
+            color: var(--t3);
+            cursor: pointer;
+            font-size: 18px;
+            padding: 4px;
+            border-radius: 6px;
+            transition: var(--tr)
+        }
+
+        .file-sel .frm:hover {
+            color: var(--red);
+            background: rgba(248, 113, 113, .1)
+        }
+
+        /* Modal */
+        .modal-ov {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, .7);
+            backdrop-filter: blur(4px);
+            z-index: 100;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 24px
+        }
+
+        .modal-ov.active {
+            display: flex
+        }
+
+        .modal {
+            background: var(--bg2);
+            border: 1px solid var(--brd);
+            border-radius: var(--rad);
+            width: 100%;
+            max-width: 640px;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 25px 80px rgba(0, 0, 0, .6);
+            animation: fadeIn .3s ease
+        }
+
+        .modal-hd {
+            padding: 20px 24px;
+            border-bottom: 1px solid rgba(56, 189, 248, .08);
+            display: flex;
+            align-items: center;
+            justify-content: space-between
+        }
+
+        .modal-hd h3 {
+            font-size: 1rem;
+            font-weight: 700
+        }
+
+        .modal-x {
+            background: none;
+            border: none;
+            color: var(--t3);
+            font-size: 20px;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 6px;
+            transition: var(--tr)
+        }
+
+        .modal-x:hover {
+            color: var(--red);
+            background: rgba(248, 113, 113, .1)
+        }
+
+        .modal-bc {
+            padding: 12px 24px;
+            border-bottom: 1px solid rgba(56, 189, 248, .06);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: .78rem;
+            color: var(--t3);
+            word-break: break-all
+        }
+
+        .modal-bd {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px 0
+        }
+
+        .modal-bd::-webkit-scrollbar {
+            width: 6px
+        }
+
+        .modal-bd::-webkit-scrollbar-thumb {
+            background: rgba(56, 189, 248, .15);
+            border-radius: 3px
+        }
+
+        .fe {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 24px;
+            cursor: pointer;
+            transition: var(--tr);
+            border-bottom: 1px solid rgba(56, 189, 248, .03)
+        }
+
+        .fe:hover {
+            background: rgba(56, 189, 248, .06)
+        }
+
+        .fe.sel {
+            background: rgba(56, 189, 248, .1);
+            border-left: 3px solid var(--cyan)
+        }
+
+        .fe .ei {
+            font-size: 18px;
+            width: 24px;
+            text-align: center
+        }
+
+        .fe .en {
+            flex: 1;
+            font-size: .88rem;
+            font-weight: 500
+        }
+
+        .fe .es {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: .75rem;
+            color: var(--t3)
+        }
+
+        .fe.is-dir .en {
+            color: var(--cyan)
+        }
+
+        .modal-ft {
+            padding: 16px 24px;
+            border-top: 1px solid rgba(56, 189, 248, .08);
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px
+        }
+
+        .btn-m {
+            padding: 10px 20px;
+            border-radius: var(--rad-s);
+            font-family: 'Inter', sans-serif;
+            font-size: .88rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--tr);
+            border: none
+        }
+
+        .btn-m.cancel {
+            background: rgba(85, 96, 120, .2);
+            color: var(--t2);
+            border: 1px solid rgba(85, 96, 120, .3)
+        }
+
+        .btn-m.cancel:hover {
+            background: rgba(85, 96, 120, .3)
+        }
+
+        .btn-m.select {
+            background: var(--g2);
+            color: #fff
+        }
+
+        .btn-m.select:hover {
+            box-shadow: 0 4px 20px rgba(56, 189, 248, .3)
+        }
+
+        .btn-m.select:disabled {
+            opacity: .4;
+            cursor: not-allowed
+        }
+
+        /* Buttons */
+        .btn-go {
+            width: 100%;
+            padding: 16px;
+            background: var(--g1);
+            border: none;
+            border-radius: var(--rad-s);
+            color: #fff;
+            font-family: 'Inter', sans-serif;
+            font-size: 1rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: var(--tr);
+            letter-spacing: .3px;
+            position: relative;
+            overflow: hidden;
+            margin-top: 8px
+        }
+
+        .btn-go::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, rgba(255, 255, 255, .15) 0%, transparent 50%);
+            opacity: 0;
+            transition: var(--tr)
+        }
+
+        .btn-go:hover:not(:disabled)::before {
+            opacity: 1
+        }
+
+        .btn-go:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 40px rgba(56, 189, 248, .3)
+        }
+
+        .btn-go:disabled {
+            opacity: .4;
+            cursor: not-allowed
+        }
+
+        /* Progress & Results */
+        .progress-s,
+        .results-s {
+            display: none
+        }
+
+        .progress-s.active,
+        .results-s.active {
+            display: block
+        }
+
+        .pb-c {
+            background: rgba(56, 189, 248, .08);
+            border-radius: 8px;
+            height: 12px;
+            overflow: hidden;
+            margin-bottom: 12px
+        }
+
+        .pb {
+            height: 100%;
+            background: var(--g2);
+            border-radius: 8px;
+            width: 0%;
+            transition: width .4s ease;
+            position: relative
+        }
+
+        .pb::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .2), transparent);
+            animation: shimmer 2s infinite
+        }
+
+        .pb.gpu-bar {
+            background: var(--g-gpu)
+        }
+
+        .ps {
+            display: flex;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 8px
+        }
+
+        .si {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: .82rem;
+            color: var(--t2)
+        }
+
+        .si .sv {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+            color: var(--t1)
+        }
+
+        .si .sd {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%
+        }
+
+        .sd.cy {
+            background: var(--cyan)
+        }
+
+        .sd.gr {
+            background: var(--green)
+        }
+
+        .sd.am {
+            background: var(--amber)
+        }
+
+        .sd.pu {
+            background: var(--purple)
+        }
+
+        .status-t {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: .9rem;
+            color: var(--t2);
+            margin-bottom: 20px
+        }
+
+        .spinner {
+            width: 18px;
+            height: 18px;
+            border: 2px solid rgba(56, 189, 248, .2);
+            border-top-color: var(--cyan);
+            border-radius: 50%;
+            animation: spin .8s linear infinite
+        }
+
+        /* Core monitor */
+        .core-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 12px
+        }
+
+        .core-item {
+            background: rgba(14, 20, 40, .6);
+            border: 1px solid rgba(56, 189, 248, .08);
+            border-radius: var(--rad-s);
+            padding: 16px;
+            transition: var(--tr)
+        }
+
+        .core-item.active {
+            border-color: rgba(56, 189, 248, .2);
+            background: rgba(14, 20, 40, .8)
+        }
+
+        .ch {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px
+        }
+
+        .cn {
+            font-size: .8rem;
+            font-weight: 600;
+            color: var(--t2);
+            text-transform: uppercase;
+            letter-spacing: .5px
+        }
+
+        .cp {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: .85rem;
+            font-weight: 700;
+            color: var(--cyan)
+        }
+
+        .cb-bg {
+            height: 6px;
+            background: rgba(56, 189, 248, .1);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-bottom: 8px
+        }
+
+        .cb {
+            height: 100%;
+            background: linear-gradient(135deg, var(--green), var(--cyan));
+            border-radius: 3px;
+            width: 0%;
+            transition: width .5s ease
+        }
+
+        .cr {
+            font-size: .75rem;
+            color: var(--t3);
+            font-family: 'JetBrains Mono', monospace
+        }
+
+        /* GPU timeline */
+        .tl-grp {
+            margin-bottom: 10px
+        }
+
+        .tl-lbl {
+            display: flex;
+            justify-content: space-between;
+            font-size: .78rem;
+            margin-bottom: 4px
+        }
+
+        .tl-n {
+            color: var(--t2);
+            font-weight: 600
+        }
+
+        .tl-v {
+            font-family: 'JetBrains Mono', monospace;
+            color: #c4b5fd;
+            font-weight: 600
+        }
+
+        .tl-trk {
+            height: 8px;
+            background: rgba(139, 92, 246, .08);
+            border-radius: 4px;
+            overflow: hidden
+        }
+
+        .tl-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width .5s ease
+        }
+
+        .tl-fill.h2d {
+            background: linear-gradient(90deg, #22d3ee, #06b6d4)
+        }
+
+        .tl-fill.kernel {
+            background: var(--g-gpu)
+        }
+
+        .tl-fill.d2h {
+            background: linear-gradient(90deg, #f472b6, #ec4899)
+        }
+
+        /* Results */
+        .r-sum {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 14px;
+            margin-bottom: 20px
+        }
+
+        .r-stat {
+            background: rgba(14, 20, 40, .6);
+            border-radius: var(--rad-s);
+            padding: 18px;
+            text-align: center;
+            border: 1px solid rgba(56, 189, 248, .08)
+        }
+
+        .r-stat .sn {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.7rem;
+            font-weight: 800;
+            margin-bottom: 4px
+        }
+
+        .sn.cy {
+            color: var(--cyan)
+        }
+
+        .sn.gr {
+            color: var(--green)
+        }
+
+        .sn.am {
+            color: var(--amber)
+        }
+
+        .sn.rd {
+            color: var(--red)
+        }
+
+        .sn.pu {
+            color: var(--purple)
+        }
+
+        .r-stat .sl {
+            font-size: .75rem;
+            color: var(--t3);
+            text-transform: uppercase;
+            letter-spacing: .5px;
+            font-weight: 600
+        }
+
+        .s-banner,
+        .e-banner {
+            border-radius: var(--rad-s);
+            padding: 18px 22px;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            font-weight: 600
+        }
+
+        .s-banner {
+            background: rgba(52, 211, 153, .08);
+            border: 1px solid rgba(52, 211, 153, .2);
+            color: var(--green)
+        }
+
+        .e-banner {
+            background: rgba(251, 191, 36, .08);
+            border: 1px solid rgba(251, 191, 36, .2);
+            color: var(--amber)
+        }
+
+        .bi {
+            font-size: 26px
+        }
+
+        .et-w {
+            max-height: 320px;
+            overflow-y: auto;
+            margin-top: 18px;
+            border-radius: var(--rad-s);
+            border: 1px solid rgba(56, 189, 248, .08)
+        }
+
+        .et-w::-webkit-scrollbar {
+            width: 6px
+        }
+
+        .et-w::-webkit-scrollbar-thumb {
+            background: rgba(56, 189, 248, .2);
+            border-radius: 3px
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: .85rem
+        }
+
+        thead {
+            position: sticky;
+            top: 0;
+            z-index: 2
+        }
+
+        th {
+            background: rgba(14, 20, 40, .95);
+            padding: 12px 16px;
+            text-align: left;
+            font-size: .75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: .8px;
+            color: var(--t3);
+            border-bottom: 1px solid rgba(56, 189, 248, .1)
+        }
+
+        td {
+            padding: 10px 16px;
+            border-bottom: 1px solid rgba(56, 189, 248, .04);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: .82rem
+        }
+
+        tr:hover td {
+            background: rgba(56, 189, 248, .03)
+        }
+
+        .inv-c {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            background: rgba(248, 113, 113, .15);
+            border: 1px solid rgba(248, 113, 113, .3);
+            border-radius: 6px;
+            color: var(--red);
+            font-weight: 700
+        }
+
+        .btn-new {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 24px;
+            background: rgba(56, 189, 248, .1);
+            border: 1px solid rgba(56, 189, 248, .2);
+            border-radius: var(--rad-s);
+            color: var(--cyan);
+            font-family: 'Inter', sans-serif;
+            font-size: .9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--tr);
+            margin-top: 20px
+        }
+
+        .btn-new:hover {
+            background: rgba(56, 189, 248, .15);
+            border-color: var(--cyan);
+            transform: translateY(-1px)
+        }
+
+        .lbl {
+            display: block;
+            font-size: .82rem;
+            font-weight: 600;
+            color: var(--t2);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: .5px
+        }
+
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(56, 189, 248, .08);
+            border: 1px solid rgba(56, 189, 248, .12);
+            border-radius: 20px;
+            padding: 6px 14px;
+            font-size: .78rem;
+            color: var(--t2);
+            margin-top: 12px
+        }
+
+        .chip .cv {
+            color: var(--cyan);
+            font-weight: 600;
+            font-family: 'JetBrains Mono', monospace
+        }
+
+        /* Tabs */
+        .tab-bar {
+            display: flex;
+            gap: 4px;
+            background: rgba(14, 20, 40, .6);
+            border-radius: 12px;
+            padding: 4px;
+            margin-bottom: 28px;
+            border: 1px solid var(--brd)
+        }
+
+        .tab-btn {
+            flex: 1;
+            padding: 12px 20px;
+            border-radius: 10px;
+            border: none;
+            background: transparent;
+            color: var(--t2);
+            font-family: 'Inter', sans-serif;
+            font-size: .9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--tr);
+            text-align: center
+        }
+
+        .tab-btn:hover {
+            color: var(--t1);
+            background: rgba(56, 189, 248, .05)
+        }
+
+        .tab-btn.active {
+            background: var(--g1);
+            color: #fff;
+            box-shadow: 0 4px 20px rgba(56, 189, 248, .25)
+        }
+
+        .tab-btn.active.compare-tab {
+            background: var(--g-gpu)
+        }
+
+        .tab-content {
+            display: none
+        }
+
+        .tab-content.active {
+            display: block
+        }
+
+        /* Similarity gauge */
+        .sim-gauge {
+            position: relative;
+            width: 200px;
+            height: 200px;
+            margin: 20px auto
+        }
+
+        .sim-circle {
+            transform: rotate(-90deg)
+        }
+
+        .sim-bg {
+            fill: none;
+            stroke: rgba(56, 189, 248, .1);
+            stroke-width: 12
+        }
+
+        .sim-fill {
+            fill: none;
+            stroke-width: 12;
+            stroke-linecap: round;
+            transition: stroke-dashoffset 1s ease, stroke .5s
+        }
+
+        .sim-text {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center
+        }
+
+        .sim-pct {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 2.5rem;
+            font-weight: 800
+        }
+
+        .sim-lbl {
+            font-size: .8rem;
+            color: var(--t3);
+            text-transform: uppercase;
+            letter-spacing: .5px;
+            font-weight: 600;
+            margin-top: 4px
+        }
+
+        /* Compare file rows */
+        .cmp-files {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px
+        }
+
+        @media(max-width:600px) {
+            .cmp-files {
+                grid-template-columns: 1fr
+            }
+        }
+
+        .cmp-file-card {
+            background: rgba(14, 20, 40, .5);
+            border: 1px solid var(--brd);
+            border-radius: var(--rad-s);
+            padding: 18px
+        }
+
+        .cmp-file-card .cfc-t {
+            font-size: .78rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: .5px;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px
+        }
+
+        .cfc-t.a {
+            color: var(--cyan)
+        }
+
+        .cfc-t.b {
+            color: var(--purple)
+        }
+
+        .cmp-file-card input {
+            width: 100%;
+            padding: 12px 14px;
+            background: rgba(14, 20, 40, .8);
+            border: 1px solid rgba(56, 189, 248, .15);
+            border-radius: 8px;
+            color: var(--t1);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: .82rem;
+            outline: none;
+            transition: var(--tr);
+            margin-bottom: 8px
+        }
+
+        .cmp-file-card input:focus {
+            border-color: var(--cyan);
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, .1)
+        }
+
+        .cmp-file-card .btn-br {
+            width: 100%;
+            padding: 10px;
+            font-size: .82rem
+        }
+
+        @media(max-width:600px) {
+            .app {
+                padding: 24px 16px 40px
+            }
+
+            .card {
+                padding: 24px
+            }
+
+            .header h1 {
+                font-size: 1.5rem
+            }
+
+            .mode-grid {
+                grid-template-columns: 1fr
+            }
+
+            .fp-row {
+                flex-direction: column
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="bg-mesh"></div>
+
+    <!-- File Browser Modal -->
+    <div class="modal-ov" id="modal-ov">
+        <div class="modal">
+            <div class="modal-hd">
+                <h3>📁 Explorador de Archivos</h3><button class="modal-x" id="modal-x">✕</button>
+            </div>
+            <div class="modal-bc" id="modal-bc">~</div>
+            <div class="modal-bd" id="modal-bd"></div>
+            <div class="modal-ft">
+                <button class="btn-m cancel" id="m-cancel">Cancelar</button>
+                <button class="btn-m select" id="m-select" disabled>Seleccionar</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="app">
+        <!-- Header -->
+        <header class="header fade-in">
+            <div class="logo">
+                <div class="logo-icon">🧬</div>
+                <h1>DNA Unified Checker</h1>
+            </div>
+            <p class="sub">Análisis y comparación de ADN — CPU o GPU</p>
+            <span class="badge">v4.0 · CPU + GPU</span>
+        </header>
+
+        <!-- Tab Navigation -->
+        <div class="tab-bar fade-in" style="animation-delay:.05s">
+            <button class="tab-btn active" id="tab-analyze" onclick="switchTab('analyze')">🔬 Análisis</button>
+            <button class="tab-btn compare-tab" id="tab-compare" onclick="switchTab('compare')">🔗 Comparación</button>
+        </div>
+
+        <!-- Upload Section -->
+        <!-- =================== ANALYZE TAB =================== -->
+        <div class="tab-content active" id="tc-analyze">
+            <section id="sec-upload">
+                <!-- Mode Selector -->
+                <div class="card fade-in" style="animation-delay:.1s">
+                    <div class="card-t"><span class="ic bl">⚡</span> Modo de Ejecución</div>
+                    <div class="mode-grid">
+                        <div class="mode-card cpu-mode active" id="mode-cpu" onclick="setMode('cpu')">
+                            <div class="mode-check">✓</div>
+                            <span class="mode-icon">🖥️</span>
+                            <div class="mode-name">CPU</div>
+                            <div class="mode-desc">Multiprocessing paralelo</div>
+                            <span class="mode-tag">{{ cpu_count }} núcleos</span>
+                        </div>
+                        <div class="mode-card gpu-mode {{ '' if gpu_available else 'disabled' }}" id="mode-gpu"
+                            onclick="setMode('gpu')">
+                            <div class="mode-check">✓</div>
+                            <span class="mode-icon">🎮</span>
+                            <div class="mode-name">GPU</div>
+                            <div class="mode-desc">{{ gpu_name if gpu_available else 'No disponible' }}</div>
+                            <span class="mode-tag">{{ 'OpenCL' if gpu_available else '❌ Sin GPU' }}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- File Selector -->
+                <div class="card fade-in" style="animation-delay:.2s">
+                    <div class="card-t"><span class="ic gr">📂</span> Archivo de ADN</div>
+                    <div class="fp-row">
+                        <input type="text" id="fp-in" placeholder="Ruta del archivo .fna / .txt" autocomplete="off" />
+                        <button class="btn-br" id="btn-br">📁 Explorar</button>
+                    </div>
+                    <div id="file-info" style="display:none"></div>
+                </div>
+
+                <!-- CPU Settings -->
+                <div class="card fade-in cpu-settings active" id="cpu-set" style="animation-delay:.3s">
+                    <div class="card-t"><span class="ic bl">⚙️</span> Configuración CPU</div>
+                    <div>
+                        <label class="lbl" for="cores-sl">Núcleos a utilizar</label>
+                        <div class="slider-w">
+                            <span class="slider-v" id="cores-v">Todos ({{ cpu_count }})</span>
+                            <input type="range" id="cores-sl" min="0" max="{{ cpu_count }}" value="0" />
+                        </div>
+                    </div>
+                    <div class="chip">💡 Chunk size <span class="cv">automático</span></div>
+                </div>
+
+                <!-- GPU Settings -->
+                <div class="card fade-in gpu-settings" id="gpu-set" style="animation-delay:.3s">
+                    <div class="card-t"><span class="ic pu">🎮</span> Configuración GPU</div>
+                    {% if gpu_available %}
+                    <div
+                        style="background:linear-gradient(135deg,rgba(139,92,246,.1),rgba(192,132,252,.05));border:1px solid rgba(139,92,246,.15);border-radius:var(--rad-s);padding:14px 20px;display:flex;align-items:center;gap:12px;margin-bottom:14px">
+                        <span style="font-size:22px">🎮</span>
+                        <div>
+                            <div style="font-size:.75rem;color:var(--t3);text-transform:uppercase;letter-spacing:.5px">
+                                GPU
+                                Detectada</div>
+                            <div style="font-weight:700;font-size:.95rem;color:#c4b5fd">{{ gpu_name }}</div>
+                        </div>
+                    </div>
+                    <div class="gpu-info-grid">
+                        <div class="gpu-stat">
+                            <div class="gv">{{ gpu_compute_units }}</div>
+                            <div class="gl">Compute Units</div>
+                        </div>
+                        <div class="gpu-stat">
+                            <div class="gv">{{ gpu_max_work_group }}</div>
+                            <div class="gl">Max Work Group</div>
+                        </div>
+                        <div class="gpu-stat">
+                            <div class="gv">{{ (gpu_global_mem / 1048576)|int }} MB</div>
+                            <div class="gl">Memoria Global</div>
+                        </div>
+                        <div class="gpu-stat">
+                            <div class="gv">{{ (gpu_local_mem / 1024)|int }} KB</div>
+                            <div class="gl">Memoria Local</div>
+                        </div>
+                    </div>
+                    <div style="margin-top:18px">
+                        <label class="lbl">Work Group Size</label>
+                        <div class="tpb-sel" id="tpb-sel">
+                            <button class="tpb-btn" data-v="16">16</button>
+                            <button class="tpb-btn" data-v="32">32</button>
+                            <button class="tpb-btn active" data-v="64">64</button>
+                            <button class="tpb-btn" data-v="128">128</button>
+                            <button class="tpb-btn" data-v="256">256</button>
+                        </div>
+                    </div>
+                    {% else %}
+                    <div
+                        style="background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.2);border-radius:var(--rad-s);padding:20px;text-align:center;color:var(--red)">
+                        <div style="font-size:28px;margin-bottom:8px">❌</div>
+                        <div style="font-weight:700">GPU no disponible</div>
+                        <div style="font-size:.85rem;opacity:.8;margin-top:4px">{{ gpu_name }}</div>
+                    </div>
+                    {% endif %}
+                </div>
+
+                <button class="btn-go fade-in" id="btn-go" disabled style="animation-delay:.4s">🚀 Iniciar
+                    Análisis</button>
+            </section>
+
+            <!-- Progress -->
+            <section class="progress-s" id="sec-prog">
+                <div class="card fade-in">
+                    <div class="card-t"><span class="ic bl">📊</span> Progreso del Análisis</div>
+                    <div class="status-t" id="status-t">
+                        <div class="spinner"></div><span>Preparando...</span>
+                    </div>
+                    <div class="pb-c">
+                        <div class="pb" id="pb"></div>
+                    </div>
+                    <div class="ps">
+                        <div class="si"><span class="sd cy"></span> Filas: <span class="sv" id="s-rows">0</span></div>
+                        <div class="si"><span class="sd am"></span> Errores: <span class="sv" id="s-err">0</span></div>
+                        <div class="si"><span class="sd gr"></span> Tiempo: <span class="sv" id="s-time">0.0s</span>
+                        </div>
+                    </div>
+                </div>
+                <!-- CPU core monitor -->
+                <div class="card fade-in" id="cpu-monitor" style="display:none">
+                    <div class="card-t"><span class="ic gr">🖥️</span> Monitor de Núcleos</div>
+                    <div class="core-grid" id="core-grid"></div>
+                </div>
+                <!-- GPU timeline -->
+                <div class="card fade-in" id="gpu-monitor" style="display:none">
+                    <div class="card-t"><span class="ic pu">🎮</span> GPU Pipeline</div>
+                    <div id="gpu-timeline">
+                        <div class="tl-grp">
+                            <div class="tl-lbl"><span class="tl-n">Host → Device</span><span class="tl-v" id="tl-h2d">0
+                                    ms</span></div>
+                            <div class="tl-trk">
+                                <div class="tl-fill h2d" id="tl-h2d-bar" style="width:0%"></div>
+                            </div>
+                        </div>
+                        <div class="tl-grp">
+                            <div class="tl-lbl"><span class="tl-n">Kernel</span><span class="tl-v" id="tl-kern">0
+                                    ms</span>
+                            </div>
+                            <div class="tl-trk">
+                                <div class="tl-fill kernel" id="tl-kern-bar" style="width:0%"></div>
+                            </div>
+                        </div>
+                        <div class="tl-grp">
+                            <div class="tl-lbl"><span class="tl-n">Device → Host</span><span class="tl-v" id="tl-d2h">0
+                                    ms</span></div>
+                            <div class="tl-trk">
+                                <div class="tl-fill d2h" id="tl-d2h-bar" style="width:0%"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="gpu-info-grid" id="gpu-live-stats"></div>
+                </div>
+            </section>
+
+            <!-- Results -->
+            <section class="results-s" id="sec-res">
+                <div class="card fade-in">
+                    <div class="card-t"><span class="ic gr">📋</span> Resultados</div>
+                    <div class="r-sum" id="r-sum"></div>
+                    <div id="r-banner"></div>
+                    <div id="r-errtbl"></div>
+                    <button class="btn-new" id="btn-new">🔄 Nuevo Análisis</button>
+                </div>
+            </section>
+        </div>
+
+        <!-- =================== COMPARE TAB =================== -->
+        <div class="tab-content" id="tc-compare">
+            <section id="sec-cmp-upload">
+                <!-- Mode selector (compare) -->
+                <div class="card fade-in" style="animation-delay:.1s">
+                    <div class="card-t"><span class="ic bl">⚡</span> Modo de Ejecución</div>
+                    <div class="mode-grid">
+                        <div class="mode-card cpu-mode active" id="cmp-mode-cpu" onclick="setCmpMode('cpu')">
+                            <div class="mode-check">✓</div><span class="mode-icon">🖥️</span>
+                            <div class="mode-name">CPU</div>
+                            <div class="mode-desc">Multiprocessing</div>
+                            <span class="mode-tag">{{ cpu_count }} núcleos</span>
+                        </div>
+                        <div class="mode-card gpu-mode {{ '' if gpu_available else 'disabled' }}" id="cmp-mode-gpu"
+                            onclick="setCmpMode('gpu')">
+                            <div class="mode-check">✓</div><span class="mode-icon">🎮</span>
+                            <div class="mode-name">GPU</div>
+                            <div class="mode-desc">{{ gpu_name if gpu_available else 'No disponible' }}</div>
+                            <span class="mode-tag">{{ 'OpenCL' if gpu_available else '❌' }}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Two file selectors -->
+                <div class="card fade-in" style="animation-delay:.2s">
+                    <div class="card-t"><span class="ic gr">📂</span> Archivos a Comparar</div>
+                    <div class="cmp-files">
+                        <div class="cmp-file-card">
+                            <div class="cfc-t a">🧬 Archivo A</div>
+                            <input type="text" id="cmp-fp-a" placeholder="Ruta archivo A" autocomplete="off" />
+                            <button class="btn-br" onclick="openBrowserFor('a')">📁 Explorar</button>
+                        </div>
+                        <div class="cmp-file-card">
+                            <div class="cfc-t b">🧬 Archivo B</div>
+                            <input type="text" id="cmp-fp-b" placeholder="Ruta archivo B" autocomplete="off" />
+                            <button class="btn-br" onclick="openBrowserFor('b')">📁 Explorar</button>
+                        </div>
+                    </div>
+                </div>
+
+                <button class="btn-go fade-in" id="btn-cmp-go" disabled style="animation-delay:.3s">🔗 Iniciar
+                    Comparación</button>
+            </section>
+
+            <!-- Compare Progress -->
+            <section class="progress-s" id="sec-cmp-prog">
+                <div class="card fade-in">
+                    <div class="card-t"><span class="ic bl">📊</span> Progreso de Comparación</div>
+                    <div class="status-t" id="cmp-status-t">
+                        <div class="spinner"></div><span>Preparando...</span>
+                    </div>
+                    <div class="pb-c">
+                        <div class="pb" id="cmp-pb"></div>
+                    </div>
+                    <div class="ps">
+                        <div class="si"><span class="sd cy"></span> Líneas: <span class="sv" id="cmp-s-rows">0</span>
+                        </div>
+                        <div class="si"><span class="sd pu"></span> Similitud: <span class="sv" id="cmp-s-sim">0%</span>
+                        </div>
+                        <div class="si"><span class="sd gr"></span> Tiempo: <span class="sv" id="cmp-s-time">0.0s</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="card fade-in" id="cmp-gpu-mon" style="display:none">
+                    <div class="card-t"><span class="ic pu">🎮</span> GPU Pipeline</div>
+                    <div id="cmp-gpu-timeline">
+                        <div class="tl-grp">
+                            <div class="tl-lbl"><span class="tl-n">H→D</span><span class="tl-v" id="cmp-tl-h2d">0
+                                    ms</span></div>
+                            <div class="tl-trk">
+                                <div class="tl-fill h2d" id="cmp-tl-h2d-bar" style="width:0%"></div>
+                            </div>
+                        </div>
+                        <div class="tl-grp">
+                            <div class="tl-lbl"><span class="tl-n">Kernel</span><span class="tl-v" id="cmp-tl-kern">0
+                                    ms</span></div>
+                            <div class="tl-trk">
+                                <div class="tl-fill kernel" id="cmp-tl-kern-bar" style="width:0%"></div>
+                            </div>
+                        </div>
+                        <div class="tl-grp">
+                            <div class="tl-lbl"><span class="tl-n">D→H</span><span class="tl-v" id="cmp-tl-d2h">0
+                                    ms</span></div>
+                            <div class="tl-trk">
+                                <div class="tl-fill d2h" id="cmp-tl-d2h-bar" style="width:0%"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Compare Results -->
+            <section class="results-s" id="sec-cmp-res">
+                <div class="card fade-in">
+                    <div class="card-t"><span class="ic gr">🔗</span> Resultados de Comparación</div>
+                    <div id="cmp-gauge"></div>
+                    <div class="r-sum" id="cmp-r-sum"></div>
+                    <div id="cmp-r-banner"></div>
+                    <div id="cmp-r-details"></div>
+                    <button class="btn-new" id="btn-cmp-new">🔄 Nueva Comparación</button>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <script>
+        const $ = id => document.getElementById(id);
+        const cpuCount = {{ cpu_count }};
+        const gpuAvailable = {{ 'true' if gpu_available else 'false' }};
+        let mode = 'cpu', cmpMode = 'cpu';
+        let selectedFile = '', modalSelPath = '', workGroupSize = 64;
+        let browserTarget = 'main'; // 'main', 'a', 'b'
+
+        // ─── Tabs ────────────────────────────────────────────
+        function switchTab(t) {
+            $('tab-analyze').classList.toggle('active', t === 'analyze');
+            $('tab-compare').classList.toggle('active', t === 'compare');
+            $('tc-analyze').classList.toggle('active', t === 'analyze');
+            $('tc-compare').classList.toggle('active', t === 'compare');
+        }
+
+        // ─── Analyze Mode ────────────────────────────────────
+        function setMode(m) {
+            if (m === 'gpu' && !gpuAvailable) return;
+            mode = m;
+            $('mode-cpu').classList.toggle('active', m === 'cpu');
+            $('mode-gpu').classList.toggle('active', m === 'gpu');
+            $('cpu-set').classList.toggle('active', m === 'cpu');
+            $('gpu-set').classList.toggle('active', m === 'gpu');
+        }
+
+        // ─── Compare Mode ────────────────────────────────────
+        function setCmpMode(m) {
+            if (m === 'gpu' && !gpuAvailable) return;
+            cmpMode = m;
+            $('cmp-mode-cpu').classList.toggle('active', m === 'cpu');
+            $('cmp-mode-gpu').classList.toggle('active', m === 'gpu');
+        }
+
+        // Work group size buttons
+        document.querySelectorAll('.tpb-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.tpb-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                workGroupSize = parseInt(btn.dataset.v);
+            });
+        });
+
+        // Cores slider
+        $('cores-sl').addEventListener('input', () => {
+            const v = parseInt($('cores-sl').value);
+            $('cores-v').textContent = v === 0 ? `Todos (${cpuCount})` : `${v} / ${cpuCount}`;
+        });
+
+        // ─── File input (analyze) ────────────────────────────
+        $('fp-in').addEventListener('input', () => {
+            const v = $('fp-in').value.trim();
+            $('btn-go').disabled = !v;
+            if (v) {
+                selectedFile = v;
+                $('file-info').style.display = 'block';
+                $('file-info').innerHTML = `<div class="file-sel"><span style="font-size:24px">🧬</span><div style="flex:1"><div class="fn">${v.split('/').pop()}</div><div class="fpath">${v}</div></div><button class="frm" onclick="clearFile()">✕</button></div>`;
+            } else { $('file-info').style.display = 'none'; }
+        });
+        function clearFile() { $('fp-in').value = ''; selectedFile = ''; $('file-info').style.display = 'none'; $('btn-go').disabled = true; }
+
+        // ─── Compare file inputs ─────────────────────────────
+        function checkCmpReady() {
+            $('btn-cmp-go').disabled = !($('cmp-fp-a').value.trim() && $('cmp-fp-b').value.trim());
+        }
+        $('cmp-fp-a').addEventListener('input', checkCmpReady);
+        $('cmp-fp-b').addEventListener('input', checkCmpReady);
+
+        // ─── Utils ───────────────────────────────────────────
+        function formatBytes(b) { if (!b) return ''; const k = 1024, s = ['B', 'KB', 'MB', 'GB']; const i = Math.floor(Math.log(b) / Math.log(k)); return parseFloat((b / Math.pow(k, i)).toFixed(1)) + ' ' + s[i]; }
+        function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+        // ─── File browser (shared) ───────────────────────────
+        $('btn-br').addEventListener('click', () => { browserTarget = 'main'; openBrowser('~'); });
+        function openBrowserFor(which) { browserTarget = which; openBrowser('~'); }
+        $('modal-x').addEventListener('click', closeModal);
+        $('m-cancel').addEventListener('click', closeModal);
+        $('modal-ov').addEventListener('click', e => { if (e.target === $('modal-ov')) closeModal(); });
+        $('m-select').addEventListener('click', () => {
+            if (!modalSelPath) return;
+            if (browserTarget === 'main') {
+                $('fp-in').value = modalSelPath; $('fp-in').dispatchEvent(new Event('input'));
+            } else if (browserTarget === 'a') {
+                $('cmp-fp-a').value = modalSelPath; checkCmpReady();
+            } else if (browserTarget === 'b') {
+                $('cmp-fp-b').value = modalSelPath; checkCmpReady();
+            }
+            closeModal();
+        });
+        function closeModal() { $('modal-ov').classList.remove('active'); }
+        async function openBrowser(p) { $('modal-ov').classList.add('active'); modalSelPath = ''; $('m-select').disabled = true; await loadDir(p); }
+        async function loadDir(p) {
+            $('modal-bd').innerHTML = '<div style="padding:32px;text-align:center;color:var(--t3)"><div class="spinner" style="margin:0 auto 12px"></div>Cargando...</div>';
+            try {
+                const r = await fetch('/api/browse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: p }) });
+                const d = await r.json(); $('modal-bc').textContent = d.current;
+                $('modal-bd').innerHTML = ''; modalSelPath = ''; $('m-select').disabled = true;
+                d.entries.forEach(e => {
+                    const div = document.createElement('div');
+                    div.className = 'fe' + (e.is_dir ? ' is-dir' : '');
+                    const ic = e.is_dir ? '📁' : (e.name.match(/\.(txt|fna|fasta|fa)$/i) ? '🧬' : '📄');
+                    div.innerHTML = `<span class="ei">${ic}</span><span class="en">${e.name}</span><span class="es">${!e.is_dir && e.size ? formatBytes(e.size) : ''}</span>`;
+                    div.addEventListener('click', () => {
+                        if (e.is_dir) { loadDir(e.path); } else {
+                            document.querySelectorAll('.fe.sel').forEach(el => el.classList.remove('sel'));
+                            div.classList.add('sel'); modalSelPath = e.path; $('m-select').disabled = false;
+                        }
+                    });
+                    $('modal-bd').appendChild(div);
+                });
+            } catch (e) { $('modal-bd').innerHTML = '<div style="padding:32px;text-align:center;color:var(--red)">Error</div>'; }
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // ─── ANALYZE ──────────────────────────────────────────
+        // ═══════════════════════════════════════════════════════
+        $('btn-go').addEventListener('click', startAnalysis);
+        async function startAnalysis() {
+            const fp = $('fp-in').value.trim(); if (!fp) return;
+            $('btn-go').disabled = true; $('sec-upload').style.display = 'none';
+            $('sec-prog').classList.add('active'); $('sec-res').classList.remove('active');
+            $('pb').style.width = '0%'; $('pb').className = mode === 'gpu' ? 'pb gpu-bar' : 'pb';
+            $('s-rows').textContent = '0'; $('s-err').textContent = '0'; $('s-time').textContent = '0.0s';
+            $('core-grid').innerHTML = '';
+            $('cpu-monitor').style.display = mode === 'cpu' ? 'block' : 'none';
+            $('gpu-monitor').style.display = mode === 'gpu' ? 'block' : 'none';
+            $('status-t').innerHTML = '<div class="spinner"></div><span>Iniciando análisis en ' + (mode === 'cpu' ? 'CPU' : 'GPU') + '...</span>';
+            try {
+                const body = { filepath: fp, mode: mode };
+                if (mode === 'cpu') body.cores = parseInt($('cores-sl').value); else body.work_group_size = workGroupSize;
+                const r = await fetch('/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+                const d = await r.json();
+                if (d.error) { $('status-t').innerHTML = `<span style="color:var(--red)">❌ ${d.error}</span>`; return; }
+                listenProgress(d.job_id);
+            } catch (e) { $('status-t').innerHTML = '<span style="color:var(--red)">❌ Error de conexión</span>'; }
+        }
+
+        function listenProgress(jid) {
+            const src = new EventSource(`/api/stream/${jid}`); let totalLines = 0;
+            src.onmessage = ev => {
+                const m = JSON.parse(ev.data);
+                switch (m.type) {
+                    case 'status':
+                        if (m.data === 'counting') $('status-t').innerHTML = '<div class="spinner"></div><span>Contando líneas...</span>';
+                        else if (m.data === 'processing') $('status-t').innerHTML = '<div class="spinner"></div><span>Procesando secuencias...</span>';
+                        break;
+                    case 'total_lines': totalLines = m.data; break;
+                    case 'progress': {
+                        const d = m.data;
+                        const pct = totalLines > 0 ? Math.min((d.rows_processed / totalLines) * 100, 100) : 0;
+                        $('pb').style.width = `${pct}%`; $('s-rows').textContent = d.rows_processed.toLocaleString();
+                        $('s-err').textContent = d.errors.toLocaleString(); $('s-time').textContent = `${d.elapsed}s`;
+                        if (d.core_load) updateCoreGrid(d.core_load);
+                        if (d.gpu_metrics) updateGpuTimeline(d.gpu_metrics);
+                        break;
+                    }
+                    case 'done': src.close(); showResults(m.data); break;
+                    case 'error': src.close(); $('status-t').innerHTML = `<span style="color:var(--red)">❌ ${m.data}</span>`; break;
+                }
+            };
+            src.onerror = () => src.close();
+        }
+
+        function updateCoreGrid(cl) {
+            const entries = Object.entries(cl); const total = entries.reduce((s, [, v]) => s + v, 0) || 1;
+            if ($('core-grid').children.length !== entries.length) {
+                $('core-grid').innerHTML = '';
+                entries.forEach(([pid], idx) => {
+                    const d = document.createElement('div'); d.className = 'core-item active';
+                    d.innerHTML = `<div class="ch"><span class="cn">Núcleo ${idx}</span><span class="cp" id="pct-${pid}">0%</span></div><div class="cb-bg"><div class="cb" id="bar-${pid}"></div></div><span class="cr" id="rows-${pid}">0 filas</span>`;
+                    $('core-grid').appendChild(d);
+                });
+            }
+            entries.forEach(([pid, count]) => {
+                const pct = Math.round((count / total) * 100); const el = id => document.getElementById(id);
+                if (el(`pct-${pid}`)) el(`pct-${pid}`).textContent = `${pct}%`;
+                if (el(`bar-${pid}`)) el(`bar-${pid}`).style.width = `${pct}%`;
+                if (el(`rows-${pid}`)) el(`rows-${pid}`).textContent = `${count.toLocaleString()} filas`;
+            });
+        }
+
+        function updateGpuTimeline(gm) {
+            const total = gm.total_gpu_time_ms || 1;
+            $('tl-h2d').textContent = `${gm.transfer_h2d_ms} ms`; $('tl-kern').textContent = `${gm.kernel_time_ms} ms`;
+            $('tl-d2h').textContent = `${gm.transfer_d2h_ms} ms`;
+            $('tl-h2d-bar').style.width = `${Math.min((gm.transfer_h2d_ms / total) * 100, 100)}%`;
+            $('tl-kern-bar').style.width = `${Math.min((gm.kernel_time_ms / total) * 100, 100)}%`;
+            $('tl-d2h-bar').style.width = `${Math.min((gm.transfer_d2h_ms / total) * 100, 100)}%`;
+            $('gpu-live-stats').innerHTML = `
+                <div class="gpu-stat"><div class="gv">${gm.total_gpu_time_ms} ms</div><div class="gl">GPU Total</div></div>
+                <div class="gpu-stat"><div class="gv">${gm.chunks_processed || 0}</div><div class="gl">Chunks</div></div>
+                <div class="gpu-stat"><div class="gv">${(gm.total_work_items || 0).toLocaleString()}</div><div class="gl">Work Items</div></div>
+                <div class="gpu-stat"><div class="gv">${gm.current_grid_shape || '-'}</div><div class="gl">Grid</div></div>`;
+        }
+
+        function showResults(data) {
+            $('sec-prog').classList.remove('active'); $('sec-res').classList.add('active');
+            const speed = data.elapsed > 0 ? Math.round(data.rows_processed / data.elapsed) : 0;
+            let extra = '';
+            if (data.mode === 'gpu' && data.gpu_summary) {
+                extra = `<div class="r-stat"><div class="sn pu">${data.gpu_summary.total_gpu_time_ms} ms</div><div class="sl">GPU Time</div></div>
+                         <div class="r-stat"><div class="sn pu">${(data.gpu_summary.throughput_chars_per_sec || 0).toLocaleString()}</div><div class="sl">Chars/seg</div></div>`;
+            }
+            $('r-sum').innerHTML = `
+                <div class="r-stat"><div class="sn cy">${data.rows_processed.toLocaleString()}</div><div class="sl">Filas</div></div>
+                <div class="r-stat"><div class="sn ${data.total_errors > 0 ? 'rd' : 'gr'}">${data.total_errors.toLocaleString()}</div><div class="sl">Errores</div></div>
+                <div class="r-stat"><div class="sn am">${data.elapsed}s</div><div class="sl">Tiempo</div></div>
+                <div class="r-stat"><div class="sn gr">${speed.toLocaleString()}</div><div class="sl">Filas/seg</div></div>${extra}`;
+            if (data.total_errors === 0) {
+                $('r-banner').innerHTML = `<div class="s-banner"><span class="bi">✅</span><div><div style="font-size:1.05rem">¡Sin errores!</div><div style="font-weight:400;font-size:.85rem;opacity:.8;margin-top:4px">Nucleótidos válidos (A, T, C, G)</div></div></div>`;
+                $('r-errtbl').innerHTML = '';
+            } else {
+                $('r-banner').innerHTML = `<div class="e-banner"><span class="bi">⚠️</span><div><div style="font-size:1.05rem">${data.total_errors.toLocaleString()} errores</div><div style="font-weight:400;font-size:.85rem;opacity:.8;margin-top:4px">${data.output_file || ''}</div></div></div>`;
+                if (data.error_details && data.error_details.length > 0) {
+                    let t = '<div class="et-w"><table><thead><tr><th>#</th><th>Fila</th><th>Col</th><th>Char</th></tr></thead><tbody>';
+                    data.error_details.forEach((e, i) => { t += `<tr><td style="color:var(--t3)">${i + 1}</td><td>${e.row.toLocaleString()}</td><td>${e.col}</td><td><span class="inv-c">${escHtml(e.char)}</span></td></tr>`; });
+                    t += '</tbody></table></div>';
+                    if (data.total_errors > 200) t += `<p style="color:var(--t3);font-size:.8rem;margin-top:10px;text-align:center">Primeros 200 de ${data.total_errors.toLocaleString()}</p>`;
+                    $('r-errtbl').innerHTML = t;
+                }
+            }
+        }
+        $('btn-new').addEventListener('click', () => { $('sec-res').classList.remove('active'); $('sec-upload').style.display = 'block'; $('fp-in').value = selectedFile; $('btn-go').disabled = !selectedFile; });
+
+        // ═══════════════════════════════════════════════════════
+        // ─── COMPARE ──────────────────────────────────────────
+        // ═══════════════════════════════════════════════════════
+        $('btn-cmp-go').addEventListener('click', startCompare);
+        async function startCompare() {
+            const fa = $('cmp-fp-a').value.trim(), fb = $('cmp-fp-b').value.trim();
+            if (!fa || !fb) return;
+            $('btn-cmp-go').disabled = true; $('sec-cmp-upload').style.display = 'none';
+            $('sec-cmp-prog').classList.add('active'); $('sec-cmp-res').classList.remove('active');
+            $('cmp-pb').style.width = '0%'; $('cmp-pb').className = cmpMode === 'gpu' ? 'pb gpu-bar' : 'pb';
+            $('cmp-s-rows').textContent = '0'; $('cmp-s-sim').textContent = '0%'; $('cmp-s-time').textContent = '0.0s';
+            $('cmp-gpu-mon').style.display = cmpMode === 'gpu' ? 'block' : 'none';
+            $('cmp-status-t').innerHTML = '<div class="spinner"></div><span>Iniciando comparación en ' + (cmpMode === 'cpu' ? 'CPU' : 'GPU') + '...</span>';
+            try {
+                const body = { filepath_a: fa, filepath_b: fb, mode: cmpMode };
+                if (cmpMode === 'cpu') body.cores = parseInt($('cores-sl').value); else body.work_group_size = workGroupSize;
+                const r = await fetch('/api/compare', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+                const d = await r.json();
+                if (d.error) { $('cmp-status-t').innerHTML = `<span style="color:var(--red)">❌ ${d.error}</span>`; return; }
+                listenCmpProgress(d.job_id);
+            } catch (e) { $('cmp-status-t').innerHTML = '<span style="color:var(--red)">❌ Error de conexión</span>'; }
+        }
+
+        function listenCmpProgress(jid) {
+            const src = new EventSource(`/api/stream/${jid}`);
+            src.onmessage = ev => {
+                const m = JSON.parse(ev.data);
+                switch (m.type) {
+                    case 'status':
+                        if (m.data === 'reading') $('cmp-status-t').innerHTML = '<div class="spinner"></div><span>Leyendo archivos...</span>';
+                        else if (m.data === 'comparing') $('cmp-status-t').innerHTML = '<div class="spinner"></div><span>Comparando secuencias...</span>';
+                        break;
+                    case 'progress': {
+                        const d = m.data;
+                        const pct = d.total_lines > 0 ? Math.min((d.rows_processed / d.total_lines) * 100, 100) : 0;
+                        $('cmp-pb').style.width = `${pct}%`;
+                        $('cmp-s-rows').textContent = d.rows_processed.toLocaleString();
+                        $('cmp-s-sim').textContent = `${d.similarity}%`;
+                        $('cmp-s-time').textContent = `${d.elapsed}s`;
+                        if (d.gpu_metrics) updateCmpGpuTimeline(d.gpu_metrics);
+                        break;
+                    }
+                    case 'done': src.close(); showCmpResults(m.data); break;
+                    case 'error': src.close(); $('cmp-status-t').innerHTML = `<span style="color:var(--red)">❌ ${m.data}</span>`; break;
+                }
+            };
+            src.onerror = () => src.close();
+        }
+
+        function updateCmpGpuTimeline(gm) {
+            const total = gm.total_gpu_time_ms || 1;
+            $('cmp-tl-h2d').textContent = `${gm.transfer_h2d_ms} ms`;
+            $('cmp-tl-kern').textContent = `${gm.kernel_time_ms} ms`;
+            $('cmp-tl-d2h').textContent = `${gm.transfer_d2h_ms} ms`;
+            $('cmp-tl-h2d-bar').style.width = `${Math.min((gm.transfer_h2d_ms / total) * 100, 100)}%`;
+            $('cmp-tl-kern-bar').style.width = `${Math.min((gm.kernel_time_ms / total) * 100, 100)}%`;
+            $('cmp-tl-d2h-bar').style.width = `${Math.min((gm.transfer_d2h_ms / total) * 100, 100)}%`;
+        }
+
+        function simColor(pct) {
+            if (pct >= 95) return 'var(--green)';
+            if (pct >= 80) return 'var(--cyan)';
+            if (pct >= 60) return 'var(--amber)';
+            return 'var(--red)';
+        }
+
+        function showCmpResults(data) {
+            $('sec-cmp-prog').classList.remove('active'); $('sec-cmp-res').classList.add('active');
+            const sim = data.similarity || 0;
+            const circumference = 2 * Math.PI * 85;
+            const offset = circumference - (sim / 100) * circumference;
+            const col = simColor(sim);
+
+            $('cmp-gauge').innerHTML = `
+                <div class="sim-gauge">
+                    <svg class="sim-circle" width="200" height="200" viewBox="0 0 200 200">
+                        <circle class="sim-bg" cx="100" cy="100" r="85"/>
+                        <circle class="sim-fill" cx="100" cy="100" r="85"
+                            stroke="${col}"
+                            stroke-dasharray="${circumference}"
+                            stroke-dashoffset="${offset}"/>
+                    </svg>
+                    <div class="sim-text">
+                        <div class="sim-pct" style="color:${col}">${sim}%</div>
+                        <div class="sim-lbl">Similitud</div>
+                    </div>
+                </div>`;
+
+            let gpuExtra = '';
+            if (data.gpu_summary) {
+                gpuExtra = `<div class="r-stat"><div class="sn pu">${data.gpu_summary.total_gpu_ms} ms</div><div class="sl">GPU Time</div></div>
+                            <div class="r-stat"><div class="sn pu">${(data.gpu_summary.throughput || 0).toLocaleString()}</div><div class="sl">Chars/seg</div></div>`;
+            }
+            $('cmp-r-sum').innerHTML = `
+                <div class="r-stat"><div class="sn cy">${(data.total_matches || 0).toLocaleString()}</div><div class="sl">Coincidencias</div></div>
+                <div class="r-stat"><div class="sn rd">${(data.total_mismatches || 0).toLocaleString()}</div><div class="sl">Diferencias</div></div>
+                <div class="r-stat"><div class="sn am">${data.elapsed}s</div><div class="sl">Tiempo</div></div>
+                <div class="r-stat"><div class="sn gr">${(data.lines_compared || 0).toLocaleString()}</div><div class="sl">Líneas</div></div>${gpuExtra}`;
+
+            const simLabel = sim >= 95 ? '¡Altamente similares!' : sim >= 80 ? 'Similitud significativa' : sim >= 50 ? 'Similitud parcial' : 'Baja similitud';
+            const bannerClass = sim >= 80 ? 's-banner' : 'e-banner';
+            const icon = sim >= 80 ? '✅' : '⚠️';
+            $('cmp-r-banner').innerHTML = `<div class="${bannerClass}"><span class="bi">${icon}</span><div><div style="font-size:1.05rem">${simLabel}</div><div style="font-weight:400;font-size:.85rem;opacity:.8;margin-top:4px">A: ${data.lines_a || 0} líneas · B: ${data.lines_b || 0} líneas · Comparadas: ${data.lines_compared || 0}</div></div></div>`;
+
+            if (data.line_details && data.line_details.length > 0) {
+                let t = '<div class="et-w"><table><thead><tr><th>Línea</th><th>Len A</th><th>Len B</th><th>Coinciden</th><th>Similitud</th></tr></thead><tbody>';
+                data.line_details.forEach(l => {
+                    const sc = simColor(l.similarity);
+                    t += `<tr><td>${l.line}</td><td>${l.len_a}</td><td>${l.len_b}</td><td>${l.matches}/${l.compared}</td><td style="color:${sc};font-weight:700">${l.similarity}%</td></tr>`;
+                });
+                t += '</tbody></table></div>';
+                $('cmp-r-details').innerHTML = t;
+            } else { $('cmp-r-details').innerHTML = ''; }
+        }
+
+        $('btn-cmp-new').addEventListener('click', () => { $('sec-cmp-res').classList.remove('active'); $('sec-cmp-upload').style.display = 'block'; checkCmpReady(); });
+    </script>
+</body>
+
+</html>
