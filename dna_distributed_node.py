@@ -688,6 +688,8 @@ class WorkerNode:
         cu_use = gpu_config.get("compute_units", self.gpu_compute_units_to_use)
 
         self.processing = True; self.current_chunk_id = chunk_id
+        mode = "GPU" if GPU_AVAILABLE else "CPU"
+        print(f"  ⚙️ Chunk {chunk_index+1}/{data.get('total_chunks',0)} — {mode}")
         start = time.time()
         result = gpu_compare_chunk(lines_a, lines_b, wg_size, cu_use, cpu_cores=self.cpu_cores_to_use)
         elapsed = time.time() - start
@@ -697,6 +699,7 @@ class WorkerNode:
         self.total_matches += result["matches"]
         self.total_compared += result["compared"]
 
+        print(f"  ✅ Chunk {chunk_index+1} listo en {elapsed:.2f}s — {round(result['matches']/max(result['compared'],1)*100,1)}% similitud")
         self._send_message("RESULT", {"chunk_id": chunk_id, "job_id": job_id,
             "chunk_index": chunk_index, "matches": result["matches"],
             "compared": result["compared"], "line_details": result["line_details"],
