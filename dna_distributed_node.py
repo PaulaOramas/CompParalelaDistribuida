@@ -773,7 +773,7 @@ class WorkerNode:
         # Si tengo mayor prioridad que los demás, espero menos antes de actuar
         # El de índice 1 (Azure) espera 0s, el de índice 2 (AWS-1) espera 5s, etc.
         if my_index is not None:
-            wait_time = my_index * 5
+            wait_time = my_index * 1
             print(f"  ⏳ Soy respaldo #{my_index} — esperando {wait_time}s antes de actuar")
             time.sleep(wait_time)
 
