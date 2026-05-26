@@ -168,7 +168,7 @@ BACKUP_COORDINATORS = [
     "3.128.40.215:5555",     # 3. AWS-1         (respaldo 2)
     "3.142.169.79:5555",     # 4. AWS-2         (respaldo 3)
     "34.68.177.178:5555",    # 5. Google Cloud  (respaldo 4)
-    # "IP_DIGITAL_OCEAN:5555",  # 6. Digital Ocean (pendiente)
+    "204.48.16.46:5555",     # 6. Digital Ocean 
 ]
 
 # ─── GPU Processing ────────────────────────────────────────────────────────
@@ -553,13 +553,6 @@ class WorkerNode:
             print(f"  Max WG:      {GPU_MAX_WORK_GROUP}")
         print(f"  Coordinador: {coordinator_addr}")
         print(f"  Seguridad:   {'🔐 Clave activa' if secret else '⚠️  Sin clave'}")
-        print(f"\n  📋 Coordinadores de respaldo (failover):")
-        for i, addr in enumerate(BACKUP_COORDINATORS):
-            marker = "← actual" if addr == coordinator_addr else ""
-            names = ["Akamai", "Azure", "AWS-1", "AWS-2", "Google Cloud"]
-            name = names[i] if i < len(names) else f"Backup-{i+1}"
-            print(f"     {i+1}. {name:12} {addr} {marker}")
-        print(f"{'='*60}\n")
 
     def _get_gpu_info(self) -> dict:
         return {
@@ -755,11 +748,11 @@ class WorkerNode:
         })
 
     def _failover_to_backup(self):
-        """Busca el siguiente coordinador activo en la lista de respaldo."""
+        """Busca el siguiente coordinador activo. Si ninguno responde,
+        el nodo de mayor prioridad levanta el coordinador automáticamente."""
         self.election_in_progress = True
-        print(f"\n  🔄 Iniciando failover automático...")
 
-        # Esperar un poco por si el coordinador vuelve
+        # Esperar por si el coordinador vuelve
         for _ in range(5):
             time.sleep(2)
             if time.time() - self.coordinator_last_seen < COORDINATOR_TIMEOUT:
@@ -769,19 +762,54 @@ class WorkerNode:
             if not self.running:
                 return
 
-        # Buscar coordinador activo en la lista
-        new_addr = self._find_active_coordinator()
+        # Buscar mi posición en la lista de respaldo
+        my_ip = self.local_ip
+        my_index = None
+        for i, addr in enumerate(BACKUP_COORDINATORS):
+            if my_ip in addr:
+                my_index = i
+                break
 
-        if new_addr:
-            print(f"\n  🎯 Failover a: {new_addr}")
-            self._reconnect_to_coordinator(new_addr)
+        # Si tengo mayor prioridad que los demás, espero menos antes de actuar
+        # El de índice 1 (Azure) espera 0s, el de índice 2 (AWS-1) espera 5s, etc.
+        if my_index is not None:
+            wait_time = my_index * 5
+            print(f"  ⏳ Soy respaldo #{my_index} — esperando {wait_time}s antes de actuar")
+            time.sleep(wait_time)
+
+            # Verificar si alguien más ya levantó el coordinador
+            new_addr = self._find_active_coordinator()
+            if new_addr:
+                print(f"  🎯 Coordinador encontrado en {new_addr}")
+                self._reconnect_to_coordinator(new_addr)
+                self.election_in_progress = False
+                return
+
+            # Nadie lo levantó — lo levanto yo
+            print(f"  👑 Levantando coordinador en esta máquina ({my_ip})...")
+            script = str(Path(__file__).parent / "dna_distributed_coordinator.py")
+            cmd = [
+                sys.executable, script,
+                "--port", "5555",
+                "--web-port", "8080",
+                "--public-ip", my_ip,
+                "--no-udp-broadcast",
+                "--secret", self.secret,
+            ]
+            subprocess.Popen(cmd)
+            time.sleep(4)
+            self._reconnect_to_coordinator(f"{my_ip}:5555")
         else:
-            print(f"\n  ❌ No hay coordinadores disponibles en la lista de respaldo")
-            print(f"  ⏳ Reintentando en 10 segundos...")
-            time.sleep(10)
-            # Reintentar desde el principio
-            self._failover_to_backup()
-            return
+            # Mi IP no está en la lista — solo busco coordinador activo
+            new_addr = self._find_active_coordinator()
+            if new_addr:
+                print(f"  🎯 Failover a: {new_addr}")
+                self._reconnect_to_coordinator(new_addr)
+            else:
+                print(f"  ❌ Sin coordinadores — reintentando en 15s...")
+                time.sleep(15)
+                self._failover_to_backup()
+                return
 
         self.election_in_progress = False
 
