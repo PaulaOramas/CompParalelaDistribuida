@@ -527,6 +527,14 @@ class WorkerNode:
         self.last_coordinator_state = {}
         self.election_in_progress = False
 
+        try:
+            self._coord_base_port = int(coordinator_addr.rsplit(":", 1)[1])
+        except (ValueError, IndexError):
+            self._coord_base_port = 5555
+        # Election announcement port: peers send VICTORY messages here
+        self._election_announce_port = self._coord_base_port + 4
+        self._election_socket = None
+
         self.chunks_processed = 0
         self.total_lines_processed = 0
         self.total_matches = 0
@@ -595,6 +603,8 @@ class WorkerNode:
         except Exception as e:
             print(f"  ❌ Error conectando: {e}")
             return
+
+        self._bind_election_socket()
 
         self.heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         self.heartbeat_thread.start()
@@ -896,18 +906,95 @@ class WorkerNode:
         self.processing = False
         self.current_chunk_id = None
 
+    def _bind_election_socket(self):
+        """Bind a PULL socket to receive VICTORY announcements from other nodes."""
+        try:
+            sock = self.context.socket(zmq.PULL)
+            sock.setsockopt(zmq.RCVTIMEO, 300)
+            sock.setsockopt(zmq.LINGER, 0)
+            sock.bind(f"tcp://0.0.0.0:{self._election_announce_port}")
+            self._election_socket = sock
+            print(f"  🗳 Socket de elección activo en puerto {self._election_announce_port}")
+        except zmq.ZMQError as e:
+            print(f"  ⚠ Socket de elección no disponible (puerto {self._election_announce_port}): {e}")
+            self._election_socket = None
+
+    def _poll_victory(self) -> str | None:
+        """Return new coordinator address if a VICTORY message arrived, else None."""
+        if not self._election_socket:
+            return None
+        try:
+            msg = self._election_socket.recv_json()
+            if msg.get("type") == "VICTORY":
+                winner = msg.get("winner_id", "?")
+                addr = msg.get("coordinator_addr", "")
+                print(f"  🏆 Nodo {winner[:8]} ganó la elección — nuevo coordinador: {addr}")
+                return addr
+        except zmq.Again:
+            pass
+        return None
+
+    def _announce_victory(self, new_coord_addr: str):
+        """Push VICTORY to all known peer IPs so they reconnect to the new coordinator."""
+        peer_ips = set()
+        if self.last_coordinator_state:
+            for pid, info in self.last_coordinator_state.get("workers", {}).items():
+                if pid != self.node_id:
+                    ip = info.get("local_ip")
+                    if ip:
+                        peer_ips.add(ip)
+        if self.known_peers:
+            for pid, info in self.known_peers.items():
+                if pid != self.node_id:
+                    ip = info.get("local_ip")
+                    if ip:
+                        peer_ips.add(ip)
+
+        if not peer_ips:
+            return
+
+        victory_msg = {
+            "type": "VICTORY",
+            "winner_id": self.node_id,
+            "coordinator_addr": new_coord_addr,
+            "timestamp": time.time(),
+        }
+        print(f"  📢 Anunciando victoria a {len(peer_ips)} peer(s)...")
+        for ip in peer_ips:
+            try:
+                push = self.context.socket(zmq.PUSH)
+                push.setsockopt(zmq.SNDTIMEO, 1000)
+                push.setsockopt(zmq.LINGER, 0)
+                push.connect(f"tcp://{ip}:{self._election_announce_port}")
+                push.send_json(victory_msg)
+                time.sleep(0.05)
+                push.close()
+            except Exception as e:
+                print(f"  ⚠ No se pudo notificar a {ip}: {e}")
+
+    def _collect_peer_ids(self) -> list[str]:
+        """Return sorted list of all known node IDs (including self, including disconnected)."""
+        ids = {self.node_id}
+        if self.last_coordinator_state:
+            ids.update(self.last_coordinator_state.get("workers", {}).keys())
+        if self.known_peers:
+            ids.update(self.known_peers.keys())
+        return sorted(ids)
+
     def _start_election(self):
         """
-        ☁️  CLOUD: Elección simplificada.
-        En cloud el coordinador es siempre la VM fija,
-        así que simplemente reintentamos reconectarnos.
-        Solo si definitivamente no hay coordinador, el nodo con
-        menor ID intenta lanzar uno nuevo.
+        Bully-style election:
+        1. Wait 10 s for coordinator to recover.
+        2. Rank nodes by sorted ID — lowest rank waits 0 s, each higher rank waits
+           an extra ELECTION_TIMEOUT seconds. During the wait, listen for a VICTORY
+           announcement from a lower-ranked winner.
+        3. After backoff, if no coordinator or victory message: become coordinator and
+           announce VICTORY to all peers so they reconnect to the right address.
         """
         self.election_in_progress = True
-        print(f"  🗳 Verificando coordinador (mi ID: {self.node_id})")
+        print(f"  🗳 Iniciando elección (mi ID: {self.node_id})")
 
-        # Esperar un poco para ver si el coordinador vuelve
+        # Phase 1: wait for coordinator to recover (10 s)
         for _ in range(5):
             time.sleep(2)
             if time.time() - self.coordinator_last_seen < COORDINATOR_TIMEOUT:
@@ -917,41 +1004,42 @@ class WorkerNode:
             if not self.running:
                 return
 
-        # Determinar si soy el nodo con menor ID entre los conocidos
-        all_peer_ids = {self.node_id}
-        if self.last_coordinator_state:
-            for peer_id, peer_info in self.last_coordinator_state.get("workers", {}).items():
-                if peer_info.get("connected", False):
-                    all_peer_ids.add(peer_id)
-        if self.known_peers:
-            all_peer_ids.update(self.known_peers.keys())
+        # Phase 2: rank-based backoff
+        sorted_ids = self._collect_peer_ids()
+        my_rank = sorted_ids.index(self.node_id)
+        total = len(sorted_ids)
+        backoff = my_rank * ELECTION_TIMEOUT
+        print(f"  📊 Rank {my_rank + 1}/{total} — backoff {backoff:.1f}s")
 
-        lowest_id = min(all_peer_ids)
+        deadline = time.time() + backoff
+        while time.time() < deadline:
+            victory_addr = self._poll_victory()
+            if victory_addr:
+                self.election_in_progress = False
+                self._reconnect_to_coordinator(victory_addr)
+                return
+            if time.time() - self.coordinator_last_seen < COORDINATOR_TIMEOUT:
+                print(f"  ✅ Coordinador detectado durante backoff — elección cancelada")
+                self.election_in_progress = False
+                return
+            if not self.running:
+                return
+            time.sleep(0.3)
 
-        if self.node_id != lowest_id:
-            # No soy el candidato — esperar que el ganador lance el coordinador
-            print(f"  ⏳ Esperando que {lowest_id[:8]} lance nuevo coordinador...")
-            for _ in range(15):
-                time.sleep(2)
-                if time.time() - self.coordinator_last_seen < COORDINATOR_TIMEOUT:
-                    print(f"  ✅ Nuevo coordinador detectado")
-                    self.election_in_progress = False
-                    return
-                if not self.running:
-                    return
-            print(f"  ⚠ No se detectó nuevo coordinador — reintentando conexión")
-            self.election_in_progress = False
-            return
-
-        # Soy el candidato — lanzar coordinador
-        print(f"\n  👑 Soy el candidato — lanzando nuevo coordinador...")
-        time.sleep(ELECTION_TIMEOUT)
-
+        # Phase 3: final check before promoting
         if time.time() - self.coordinator_last_seen < COORDINATOR_TIMEOUT:
             print(f"  ✅ Coordinador respondió — elección cancelada")
             self.election_in_progress = False
             return
 
+        victory_addr = self._poll_victory()
+        if victory_addr:
+            self.election_in_progress = False
+            self._reconnect_to_coordinator(victory_addr)
+            return
+
+        # Phase 4: I am the winner
+        print(f"\n  👑 Soy el ganador de la elección — promoviendo a coordinador...")
         self._become_coordinator()
 
     def _become_coordinator(self):
@@ -1004,6 +1092,10 @@ class WorkerNode:
 
             time.sleep(2)
             new_addr = f"{local_ip}:{coord_port}"
+
+            # Announce to all peers so they reconnect to us (prevents split-brain)
+            self._announce_victory(new_addr)
+
             self._reconnect_to_coordinator(new_addr)
 
         except Exception as e:
@@ -1015,6 +1107,8 @@ class WorkerNode:
         self._send_message("UNREGISTER", {})
         print(f"\n  🛑 Worker {self.node_id} detenido")
         try:
+            if self._election_socket:
+                self._election_socket.close()
             self.dealer.close()
             self.sub.close()
             self.context.term()
