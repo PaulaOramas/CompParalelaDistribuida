@@ -3,19 +3,17 @@ DNA Distributed Worker Node v2.0 — Cloud Edition
 ================================
 Nodo worker que se conecta al coordinador para procesar
 chunks de comparación de ADN de forma distribuida.
-Usa GPU (OpenCL) para procesamiento y CPU para lectura.
 
-☁️  MODO CLOUD: soporta clave secreta y no depende de UDP broadcast
-para descubrir coordinadores (conexión directa por IP pública).
+☁️  IPs de coordinadores de respaldo (failover en orden):
+  1. Akamai        172.233.178.55:5555  (principal)
+  2. Azure         52.252.135.195:5555  (respaldo 1)
+  3. AWS-1         3.128.40.215:5555    (respaldo 2)
+  4. AWS-2         3.142.169.79:5555    (respaldo 3)
+  5. Google Cloud  34.68.177.178:5555   (respaldo 4)
+  # Digital Ocean  pendiente
 
-Uso local (LAN):
-    python dna_distributed_node.py --coordinator 192.168.1.100:5555
-
-Uso en cloud (internet):
-    python dna_distributed_node.py \\
-        --coordinator 34.68.177.178:5555 \\
-        --secret MI_CLAVE_SECRETA \\
-        --name mi-nombre
+Uso:
+    python dna_distributed_node.py --coordinator 172.233.178.55:5555 --secret dna2024
 """
 
 import argparse
@@ -160,9 +158,18 @@ except Exception as e:
 VALID = frozenset("ATCGNatcgn")
 VALID_ARRAY = np.array([ord(c) for c in VALID], dtype=np.uint8) if 'np' in dir() else None
 HEARTBEAT_INTERVAL = 2.0
-COORDINATOR_TIMEOUT = 10.0
-ELECTION_TIMEOUT = 5.0
+COORDINATOR_TIMEOUT = 15.0
 FAILOVER_STATE_FILE = Path(__file__).parent / ".failover_state.json"
+
+# ─── Lista de coordinadores de respaldo (orden de prioridad) ───────────────
+BACKUP_COORDINATORS = [
+    "172.233.178.55:5555",   # 1. Akamai        (principal)
+    "52.252.135.195:5555",   # 2. Azure         (respaldo 1)
+    "3.128.40.215:5555",     # 3. AWS-1         (respaldo 2)
+    "3.142.169.79:5555",     # 4. AWS-2         (respaldo 3)
+    "34.68.177.178:5555",    # 5. Google Cloud  (respaldo 4)
+    # "IP_DIGITAL_OCEAN:5555",  # 6. Digital Ocean (pendiente)
+]
 
 # ─── GPU Processing ────────────────────────────────────────────────────────
 
@@ -229,8 +236,8 @@ def gpu_compare_chunk(lines_a: list, lines_b: list,
         batch_count = batch_end - batch_start
         batch_global_rows = ((batch_count + wg_rows - 1) // wg_rows) * wg_rows
 
-        batch_arr_a = arr_a[batch_start * max_len : (batch_start + batch_count) * max_len]
-        batch_arr_b = arr_b[batch_start * max_len : (batch_start + batch_count) * max_len]
+        batch_arr_a = arr_a[batch_start * max_len:(batch_start + batch_count) * max_len]
+        batch_arr_b = arr_b[batch_start * max_len:(batch_start + batch_count) * max_len]
         batch_lens_a = lens_a[batch_start:batch_end]
         batch_lens_b = lens_b[batch_start:batch_end]
 
@@ -499,7 +506,7 @@ def cpu_compare_chunk(lines_a: list, lines_b: list, cpu_cores: int = 1) -> dict:
 
 class WorkerNode:
     def __init__(self, coordinator_addr: str, node_name: str = None,
-                 secret: str = ""):  # ☁️  CLOUD: parámetro secret
+                 secret: str = ""):
         self.node_id = str(uuid.uuid4())[:8]
         self.node_name = node_name or f"worker-{self.node_id}"
         self.coordinator_addr = coordinator_addr
@@ -507,7 +514,7 @@ class WorkerNode:
         self.pid = os.getpid()
         self.cpu_count = os.cpu_count() or 1
         self.local_ip = self._get_local_ip()
-        self.secret = secret  # ☁️  CLOUD: clave secreta
+        self.secret = secret
 
         self.context = zmq.Context()
         self.running = False
@@ -526,14 +533,6 @@ class WorkerNode:
         self.coordinator_last_seen = 0
         self.last_coordinator_state = {}
         self.election_in_progress = False
-
-        try:
-            self._coord_base_port = int(coordinator_addr.rsplit(":", 1)[1])
-        except (ValueError, IndexError):
-            self._coord_base_port = 5555
-        # Election announcement port: peers send VICTORY messages here
-        self._election_announce_port = self._coord_base_port + 4
-        self._election_socket = None
 
         self.chunks_processed = 0
         self.total_lines_processed = 0
@@ -554,6 +553,12 @@ class WorkerNode:
             print(f"  Max WG:      {GPU_MAX_WORK_GROUP}")
         print(f"  Coordinador: {coordinator_addr}")
         print(f"  Seguridad:   {'🔐 Clave activa' if secret else '⚠️  Sin clave'}")
+        print(f"\n  📋 Coordinadores de respaldo (failover):")
+        for i, addr in enumerate(BACKUP_COORDINATORS):
+            marker = "← actual" if addr == coordinator_addr else ""
+            names = ["Akamai", "Azure", "AWS-1", "AWS-2", "Google Cloud"]
+            name = names[i] if i < len(names) else f"Backup-{i+1}"
+            print(f"     {i+1}. {name:12} {addr} {marker}")
         print(f"{'='*60}\n")
 
     def _get_gpu_info(self) -> dict:
@@ -574,6 +579,44 @@ class WorkerNode:
             return ip
         except Exception:
             return "127.0.0.1"
+
+    def _try_connect_to(self, addr: str) -> bool:
+        """Intenta conectarse a un coordinador específico. Retorna True si responde."""
+        try:
+            ctx = zmq.Context()
+            sub = ctx.socket(zmq.SUB)
+            sub.setsockopt_string(zmq.SUBSCRIBE, "")
+            sub.setsockopt(zmq.RCVTIMEO, 3000)
+            sub.setsockopt(zmq.LINGER, 0)
+            host, port = addr.rsplit(":", 1)
+            sub.connect(f"tcp://{host}:{int(port) + 1}")
+            try:
+                msg = sub.recv_json()
+                if msg.get("type") == "COORDINATOR_HEARTBEAT":
+                    sub.close()
+                    ctx.term()
+                    return True
+            except zmq.Again:
+                pass
+            sub.close()
+            ctx.term()
+        except Exception:
+            pass
+        return False
+
+    def _find_active_coordinator(self) -> str | None:
+        """Busca el primer coordinador activo en la lista de respaldo."""
+        print(f"\n  🔍 Buscando coordinador activo en la lista de respaldo...")
+        for addr in BACKUP_COORDINATORS:
+            if addr == self.coordinator_addr:
+                continue  # Ya sabemos que este falló
+            print(f"  📡 Probando {addr}...", end=" ", flush=True)
+            if self._try_connect_to(addr):
+                print(f"✅ Activo!")
+                return addr
+            else:
+                print(f"❌ Sin respuesta")
+        return None
 
     def start(self):
         self.running = True
@@ -604,8 +647,6 @@ class WorkerNode:
             print(f"  ❌ Error conectando: {e}")
             return
 
-        self._bind_election_socket()
-
         self.heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         self.heartbeat_thread.start()
 
@@ -615,15 +656,13 @@ class WorkerNode:
         self._work_loop()
 
     def _send_message(self, msg_type: str, data: dict = None):
-        """Send a message to the coordinator (thread-safe).
-        ☁️  CLOUD: incluye la clave secreta en todos los mensajes."""
         message = {
             "type": msg_type,
             "node_id": self.node_id,
             "node_name": self.node_name,
             "timestamp": time.time(),
             "data": data or {},
-            "secret": self.secret,  # ☁️  CLOUD: adjuntar clave en cada mensaje
+            "secret": self.secret,
         }
         with self._dealer_lock:
             try:
@@ -677,13 +716,6 @@ class WorkerNode:
         elif msg_type == "PEER_LIST":
             self.known_peers = msg.get("data", {}).get("peers", {})
 
-        elif msg_type == "ELECTION":
-            election_id = msg.get("data", {}).get("initiator", "")
-            if self.node_id < election_id:
-                self._send_message("ELECTION_RESPONSE", {
-                    "to": election_id, "from": self.node_id,
-                })
-
         elif msg_type == "NEW_COORDINATOR":
             new_coord = msg.get("data", {})
             new_addr = new_coord.get("addr", "")
@@ -694,10 +726,10 @@ class WorkerNode:
                 self.election_in_progress = False
 
         elif msg_type == "SHUTDOWN":
-            print("\n  ⚠ Coordinador se apagó.")
+            print("\n  ⚠ Coordinador se apagó — buscando respaldo...")
             self.coordinator_last_seen = 0
             if not self.election_in_progress:
-                threading.Thread(target=self._start_election, daemon=True).start()
+                threading.Thread(target=self._failover_to_backup, daemon=True).start()
 
     def _reconnect_to_coordinator(self, new_addr: str):
         try:
@@ -719,7 +751,39 @@ class WorkerNode:
         self._send_message("REGISTER", {
             "hostname": self.hostname, "pid": self.pid,
             "cpu_count": self.cpu_count, "gpu_info": self._get_gpu_info(),
+            "local_ip": self.local_ip,
         })
+
+    def _failover_to_backup(self):
+        """Busca el siguiente coordinador activo en la lista de respaldo."""
+        self.election_in_progress = True
+        print(f"\n  🔄 Iniciando failover automático...")
+
+        # Esperar un poco por si el coordinador vuelve
+        for _ in range(5):
+            time.sleep(2)
+            if time.time() - self.coordinator_last_seen < COORDINATOR_TIMEOUT:
+                print(f"  ✅ Coordinador original volvió — failover cancelado")
+                self.election_in_progress = False
+                return
+            if not self.running:
+                return
+
+        # Buscar coordinador activo en la lista
+        new_addr = self._find_active_coordinator()
+
+        if new_addr:
+            print(f"\n  🎯 Failover a: {new_addr}")
+            self._reconnect_to_coordinator(new_addr)
+        else:
+            print(f"\n  ❌ No hay coordinadores disponibles en la lista de respaldo")
+            print(f"  ⏳ Reintentando en 10 segundos...")
+            time.sleep(10)
+            # Reintentar desde el principio
+            self._failover_to_backup()
+            return
+
+        self.election_in_progress = False
 
     def _work_loop(self):
         poller = zmq.Poller()
@@ -741,10 +805,12 @@ class WorkerNode:
                         msg = self.dealer.recv_json()
                     self._handle_work(msg)
 
-                if time.time() - self.coordinator_last_seen > COORDINATOR_TIMEOUT:
-                    if not self.is_coordinator and not self.election_in_progress:
-                        print("\n  ⚠ Coordinador no responde. Iniciando elección...")
-                        self._start_election()
+                # Detectar coordinador caído
+                if (time.time() - self.coordinator_last_seen > COORDINATOR_TIMEOUT
+                        and self.coordinator_last_seen > 0
+                        and not self.election_in_progress):
+                    print(f"\n  ⚠ Coordinador no responde — iniciando failover...")
+                    threading.Thread(target=self._failover_to_backup, daemon=True).start()
 
             except zmq.ZMQError:
                 time.sleep(0.1)
@@ -765,24 +831,10 @@ class WorkerNode:
         if msg_type == "CHUNK_COMPARE":
             if self.enabled:
                 self._process_compare_chunk(msg)
-            else:
-                data = msg.get("data", {})
-                self._send_message("CHUNK_REJECTED", {
-                    "chunk_id": data.get("chunk_id"),
-                    "job_id": data.get("job_id"),
-                    "reason": "Node disabled",
-                })
 
         elif msg_type == "CHUNK_VALIDATE":
             if self.enabled:
                 self._process_validate_chunk(msg)
-            else:
-                data = msg.get("data", {})
-                self._send_message("CHUNK_REJECTED", {
-                    "chunk_id": data.get("chunk_id"),
-                    "job_id": data.get("job_id"),
-                    "reason": "Node disabled",
-                })
 
         elif msg_type == "PING":
             self._send_message("PONG", {"responding_to": msg.get("data", {}).get("ping_id")})
@@ -804,14 +856,12 @@ class WorkerNode:
                 self.gpu_work_group_size = min(wg, GPU_MAX_WORK_GROUP)
             if cu > 0:
                 self.gpu_compute_units_to_use = min(cu, GPU_COMPUTE_UNITS)
-            print(f"\n  ⚙️ GPU config actualizada: WG={self.gpu_work_group_size}, CUs={self.gpu_compute_units_to_use}")
 
         elif msg_type == "CPU_CONFIG":
             data = msg.get("data", {})
             cores = data.get("cpu_cores", 0)
             if 0 < cores <= self.cpu_count:
                 self.cpu_cores_to_use = cores
-            print(f"\n  ⚙️ CPU config actualizada: Cores={self.cpu_cores_to_use}/{self.cpu_count}")
 
         elif msg_type == "KILL":
             reason = msg.get("data", {}).get("reason", "Unknown")
@@ -834,10 +884,6 @@ class WorkerNode:
         self.processing = True
         self.current_chunk_id = chunk_id
 
-        mode = "GPU" if GPU_AVAILABLE else f"CPU ({self.cpu_cores_to_use} cores)"
-        print(f"\n  📥 Chunk {chunk_index+1}/{total_chunks} recibido "
-              f"(— Procesando con {mode}")
-
         start = time.time()
         result = gpu_compare_chunk(lines_a, lines_b, wg_size, cu_use,
                                    cpu_cores=self.cpu_cores_to_use)
@@ -847,10 +893,6 @@ class WorkerNode:
         self.total_lines_processed += len(lines_a)
         self.total_matches += result["matches"]
         self.total_compared += result["compared"]
-
-        sim_pct = result['matches'] / max(result['compared'], 1) * 100
-        print(f"  ✅ Chunk {chunk_index+1} procesado con {mode} en {elapsed:.2f}s — "
-              f"Coincidencia: {result['matches']}/{result['compared']} ({sim_pct:.1f}%)")
 
         self._send_message("RESULT", {
             "chunk_id": chunk_id, "job_id": job_id, "chunk_index": chunk_index,
@@ -880,9 +922,6 @@ class WorkerNode:
         self.processing = True
         self.current_chunk_id = chunk_id
 
-        mode = "GPU" if GPU_AVAILABLE else f"CPU ({self.cpu_cores_to_use} cores)"
-        print(f"\n  🔍 Validación chunk {chunk_index+1}/{total_chunks} ({len(lines)} líneas) — {mode}")
-
         start = time.time()
         result = gpu_validate_chunk(lines, row_numbers, wg_size, cu_use,
                                     cpu_cores=self.cpu_cores_to_use)
@@ -890,9 +929,6 @@ class WorkerNode:
 
         self.chunks_processed += 1
         self.total_lines_processed += result["lines_processed"]
-
-        print(f"  ✅ Validación chunk {chunk_index+1}: "
-              f"{result['total_errors']} errores en {elapsed:.2f}s ({mode})")
 
         self._send_message("VALIDATE_RESULT", {
             "chunk_id": chunk_id, "job_id": job_id, "chunk_index": chunk_index,
@@ -906,209 +942,11 @@ class WorkerNode:
         self.processing = False
         self.current_chunk_id = None
 
-    def _bind_election_socket(self):
-        """Bind a PULL socket to receive VICTORY announcements from other nodes."""
-        try:
-            sock = self.context.socket(zmq.PULL)
-            sock.setsockopt(zmq.RCVTIMEO, 300)
-            sock.setsockopt(zmq.LINGER, 0)
-            sock.bind(f"tcp://0.0.0.0:{self._election_announce_port}")
-            self._election_socket = sock
-            print(f"  🗳 Socket de elección activo en puerto {self._election_announce_port}")
-        except zmq.ZMQError as e:
-            print(f"  ⚠ Socket de elección no disponible (puerto {self._election_announce_port}): {e}")
-            self._election_socket = None
-
-    def _poll_victory(self) -> str | None:
-        """Return new coordinator address if a VICTORY message arrived, else None."""
-        if not self._election_socket:
-            return None
-        try:
-            msg = self._election_socket.recv_json()
-            if msg.get("type") == "VICTORY":
-                winner = msg.get("winner_id", "?")
-                addr = msg.get("coordinator_addr", "")
-                print(f"  🏆 Nodo {winner[:8]} ganó la elección — nuevo coordinador: {addr}")
-                return addr
-        except zmq.Again:
-            pass
-        return None
-
-    def _announce_victory(self, new_coord_addr: str):
-        """Push VICTORY to all known peer IPs so they reconnect to the new coordinator."""
-        peer_ips = set()
-        if self.last_coordinator_state:
-            for pid, info in self.last_coordinator_state.get("workers", {}).items():
-                if pid != self.node_id:
-                    ip = info.get("local_ip")
-                    if ip:
-                        peer_ips.add(ip)
-        if self.known_peers:
-            for pid, info in self.known_peers.items():
-                if pid != self.node_id:
-                    ip = info.get("local_ip")
-                    if ip:
-                        peer_ips.add(ip)
-
-        if not peer_ips:
-            return
-
-        victory_msg = {
-            "type": "VICTORY",
-            "winner_id": self.node_id,
-            "coordinator_addr": new_coord_addr,
-            "timestamp": time.time(),
-        }
-        print(f"  📢 Anunciando victoria a {len(peer_ips)} peer(s)...")
-        for ip in peer_ips:
-            try:
-                push = self.context.socket(zmq.PUSH)
-                push.setsockopt(zmq.SNDTIMEO, 1000)
-                push.setsockopt(zmq.LINGER, 0)
-                push.connect(f"tcp://{ip}:{self._election_announce_port}")
-                push.send_json(victory_msg)
-                time.sleep(0.05)
-                push.close()
-            except Exception as e:
-                print(f"  ⚠ No se pudo notificar a {ip}: {e}")
-
-    def _collect_peer_ids(self) -> list[str]:
-        """Return sorted list of all known node IDs (including self, including disconnected)."""
-        ids = {self.node_id}
-        if self.last_coordinator_state:
-            ids.update(self.last_coordinator_state.get("workers", {}).keys())
-        if self.known_peers:
-            ids.update(self.known_peers.keys())
-        return sorted(ids)
-
-    def _start_election(self):
-        """
-        Bully-style election:
-        1. Wait 10 s for coordinator to recover.
-        2. Rank nodes by sorted ID — lowest rank waits 0 s, each higher rank waits
-           an extra ELECTION_TIMEOUT seconds. During the wait, listen for a VICTORY
-           announcement from a lower-ranked winner.
-        3. After backoff, if no coordinator or victory message: become coordinator and
-           announce VICTORY to all peers so they reconnect to the right address.
-        """
-        self.election_in_progress = True
-        print(f"  🗳 Iniciando elección (mi ID: {self.node_id})")
-
-        # Phase 1: wait for coordinator to recover (10 s)
-        for _ in range(5):
-            time.sleep(2)
-            if time.time() - self.coordinator_last_seen < COORDINATOR_TIMEOUT:
-                print(f"  ✅ Coordinador volvió — elección cancelada")
-                self.election_in_progress = False
-                return
-            if not self.running:
-                return
-
-        # Phase 2: rank-based backoff
-        sorted_ids = self._collect_peer_ids()
-        my_rank = sorted_ids.index(self.node_id)
-        total = len(sorted_ids)
-        backoff = my_rank * ELECTION_TIMEOUT
-        print(f"  📊 Rank {my_rank + 1}/{total} — backoff {backoff:.1f}s")
-
-        deadline = time.time() + backoff
-        while time.time() < deadline:
-            victory_addr = self._poll_victory()
-            if victory_addr:
-                self.election_in_progress = False
-                self._reconnect_to_coordinator(victory_addr)
-                return
-            if time.time() - self.coordinator_last_seen < COORDINATOR_TIMEOUT:
-                print(f"  ✅ Coordinador detectado durante backoff — elección cancelada")
-                self.election_in_progress = False
-                return
-            if not self.running:
-                return
-            time.sleep(0.3)
-
-        # Phase 3: final check before promoting
-        if time.time() - self.coordinator_last_seen < COORDINATOR_TIMEOUT:
-            print(f"  ✅ Coordinador respondió — elección cancelada")
-            self.election_in_progress = False
-            return
-
-        victory_addr = self._poll_victory()
-        if victory_addr:
-            self.election_in_progress = False
-            self._reconnect_to_coordinator(victory_addr)
-            return
-
-        # Phase 4: I am the winner
-        print(f"\n  👑 Soy el ganador de la elección — promoviendo a coordinador...")
-        self._become_coordinator()
-
-    def _become_coordinator(self):
-        self.is_coordinator = True
-        self.election_in_progress = False
-
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            local_ip = s.getsockname()[0]
-            s.close()
-        except Exception:
-            local_ip = "127.0.0.1"
-
-        if self.last_coordinator_state:
-            try:
-                state_to_save = {
-                    "timestamp": time.time(),
-                    "state": self.last_coordinator_state,
-                    "promoted_by": self.node_id,
-                }
-                with open(FAILOVER_STATE_FILE, "w") as f:
-                    json.dump(state_to_save, f, indent=2)
-                print(f"  💾 Estado guardado en {FAILOVER_STATE_FILE}")
-            except Exception as e:
-                print(f"  ⚠ No se pudo guardar estado: {e}")
-
-        coord_port = 5557
-        web_port = 5001
-
-        print(f"  🔄 Iniciando coordinador en {local_ip}:{coord_port}")
-
-        try:
-            script_dir = Path(__file__).parent
-            coord_script = script_dir / "dna_distributed_coordinator.py"
-
-            cmd = [
-                sys.executable, str(coord_script),
-                "--port", str(coord_port),
-                "--web-port", str(web_port),
-                "--no-udp-broadcast",  # ☁️  CLOUD: mantener modo cloud
-            ]
-            if self.secret:
-                cmd.extend(["--secret", self.secret])
-            if self.last_coordinator_state:
-                cmd.extend(["--restore-state", str(FAILOVER_STATE_FILE)])
-
-            subprocess.Popen(cmd, cwd=str(script_dir))
-            print(f"  ✅ Nuevo coordinador lanzado")
-
-            time.sleep(2)
-            new_addr = f"{local_ip}:{coord_port}"
-
-            # Announce to all peers so they reconnect to us (prevents split-brain)
-            self._announce_victory(new_addr)
-
-            self._reconnect_to_coordinator(new_addr)
-
-        except Exception as e:
-            print(f"  ❌ Error al iniciar coordinador: {e}")
-            self.is_coordinator = False
-
     def stop(self):
         self.running = False
         self._send_message("UNREGISTER", {})
         print(f"\n  🛑 Worker {self.node_id} detenido")
         try:
-            if self._election_socket:
-                self._election_socket.close()
             self.dealer.close()
             self.sub.close()
             self.context.term()
@@ -1121,20 +959,19 @@ class WorkerNode:
 def main():
     parser = argparse.ArgumentParser(
         prog="dna_distributed_node",
-        description="Nodo worker para comparación distribuida de ADN v2.0 (Cloud Edition)",
+        description="Nodo worker para comparación distribuida de ADN v2.0",
     )
     parser.add_argument(
-        "--coordinator", "-c", required=True,
-        help="Dirección del coordinador (IP:PUERTO), ej: 34.68.177.178:5555",
+        "--coordinator", "-c", default=BACKUP_COORDINATORS[0],
+        help=f"Dirección del coordinador (default: {BACKUP_COORDINATORS[0]})",
     )
     parser.add_argument(
         "--name", "-n", default=None,
         help="Nombre personalizado para este nodo",
     )
-    # ☁️  CLOUD: argumento de clave secreta
     parser.add_argument(
         "--secret", "-s", default="",
-        help="☁️  Clave secreta compartida con el coordinador",
+        help="Clave secreta compartida con el coordinador",
     )
     args = parser.parse_args()
 
