@@ -826,7 +826,7 @@ class WorkerNode:
 
         mode = "GPU" if GPU_AVAILABLE else f"CPU ({self.cpu_cores_to_use} cores)"
         print(f"\n  📥 Chunk {chunk_index+1}/{total_chunks} recibido "
-              f"({len(lines_a)} líneas) — Procesando con {mode}")
+              f"(— Procesando con {mode}")
 
         start = time.time()
         result = gpu_compare_chunk(lines_a, lines_b, wg_size, cu_use,
